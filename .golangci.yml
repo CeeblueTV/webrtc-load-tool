@@ -1,0 +1,137 @@
+run:
+  timeout: 5m
+
+linters-settings:
+  govet:
+    enable:
+      - shadow
+      - fieldalignment
+  misspell:
+    locale: US
+  exhaustive:
+    default-signifies-exhaustive: true
+  gomodguard:
+    blocked:
+      modules:
+        - github.com/pkg/errors:
+            recommendations:
+              - errors
+  forbidigo:
+    forbid:
+      - ^fmt.Print(f|ln)?$
+      - ^log.(Panic|Fatal|Print)(f|ln)?$
+      - ^os.Exit$
+      - ^panic$
+      - ^print(ln)?$
+  varnamelen:
+    max-distance: 12
+    min-name-length: 2
+    ignore-type-assert-ok: true
+    ignore-map-index-ok: true
+    ignore-chan-recv-ok: true
+    ignore-decls:
+      - i int
+      - n int
+      - w io.Writer
+      - r io.Reader
+      - b []byte
+
+linters:
+  enable:
+    - asciicheck       
+    - bidichk          
+    - bodyclose        
+    - containedctx     
+    - contextcheck     
+    - cyclop           
+    - decorder         
+    - dogsled          
+    - dupl             
+    - durationcheck    
+    - err113           
+    - errcheck         
+    - errchkjson       
+    - errname          
+    - errorlint        
+    - exhaustive       
+    - copyloopvar    
+    - forbidigo        
+    - forcetypeassert  
+    - gci              
+    - gochecknoglobals 
+    - gocognit         
+    - goconst          
+    - gocritic         
+    - gocyclo          
+    - godot            
+    - godox            
+    - gofmt            
+    - gofumpt          
+    - goheader         
+    - goimports        
+    - gomoddirectives  
+    - goprintffuncname 
+    - gosec            
+    - gosimple         
+    - govet            
+    - grouper          
+    - importas         
+    - ineffassign      
+    - lll              
+    - maintidx         
+    - makezero         
+    - misspell         
+    - nakedret         
+    - nestif           
+    - nilerr           
+    - nilnil           
+    - nlreturn         
+    - noctx            
+    - predeclared      
+    - revive           
+    - staticcheck      
+    - stylecheck       
+    - tagliatelle      
+    - tenv             
+    - thelper          
+    - typecheck        
+    - unconvert        
+    - unparam          
+    - unused           
+    - varnamelen       
+    - wastedassign     
+    - whitespace       
+  disable:
+    - depguard         
+    - funlen           
+    - gochecknoinits   
+    - gomodguard       
+    - interfacebloat   
+    - ireturn          
+    - mnd              
+    - nolintlint       
+    - paralleltest     
+    - prealloc         
+    - promlinter       
+    - rowserrcheck     
+    - sqlclosecheck    
+    - testpackage      
+    - tparallel        
+    - wrapcheck        
+    - wsl              
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-use-default: false
+  exclude-dirs-use-default: false
+  exclude-rules:
+    # Allow complex tests and examples, better to be self contained
+    - path: (examples|main\.go|_test\.go)
+      linters:
+        - forbidigo
+        - gocognit
+
+    - path: cmd
+      linters:
+        - forbidigo
