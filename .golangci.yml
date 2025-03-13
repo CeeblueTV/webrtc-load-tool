@@ -23,6 +23,9 @@ linters-settings:
       - ^os.Exit$
       - ^panic$
       - ^print(ln)?$
+      - p: ^testing.T.(Error|Errorf|Fatal|Fatalf|Fail|FailNow)$
+        pkg: ^testing$
+        msg: "use testify/assert instead"
   varnamelen:
     max-distance: 12
     min-name-length: 2
@@ -121,15 +124,15 @@ linters:
     - wsl              
 
 issues:
-  max-issues-per-linter: 0
-  max-same-issues: 0
   exclude-use-default: false
   exclude-dirs-use-default: false
   exclude-rules:
-    # Allow complex tests and examples, better to be self contained
-    - path: (examples|main\.go|_test\.go)
+    - path: (examples|main\.go)
       linters:
+        - gocognit
         - forbidigo
+    - path: _test\.go
+      linters:
         - gocognit
 
     - path: cmd
