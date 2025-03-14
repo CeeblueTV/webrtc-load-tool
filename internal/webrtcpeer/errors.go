@@ -1,4 +1,4 @@
-package webrtc
+package webrtcpeer
 
 import "errors"
 
