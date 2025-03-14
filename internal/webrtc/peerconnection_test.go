@@ -1,6 +1,11 @@
 package webrtc
 
 import (
+	"context"
+	"io"
+	"mime"
+	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,13 +15,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func connectTestPeerConnection(t *testing.T, api *API, offer *PeerConnection) (
+func createTestPair(t *testing.T, client *Client) (
 	answer *webrtc.PeerConnection,
 	videoTrack *webrtc.TrackLocalStaticRTP,
 	audioTrack *webrtc.TrackLocalStaticRTP,
 ) {
 	t.Helper()
-	answerPC, err := api.api.NewPeerConnection(webrtc.Configuration{
+	answerPC, err := client.api.NewPeerConnection(webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			{
 				URLs: []string{"stun:stun.l.google.com:19302"},
@@ -27,7 +32,7 @@ func connectTestPeerConnection(t *testing.T, api *API, offer *PeerConnection) (
 	assert.NotNil(t, answerPC)
 
 	videoMimeType := webrtc.MimeTypeH264
-	if api.videoCodec == VideoCodecVP8 {
+	if client.videoCodec == VideoCodecVP8 {
 		videoMimeType = webrtc.MimeTypeVP8
 	}
 
@@ -69,6 +74,17 @@ func connectTestPeerConnection(t *testing.T, api *API, offer *PeerConnection) (
 			}
 		}
 	}()
+
+	return answerPC, videoTrack, audioTrack
+}
+
+func connectTestPeerConnection(t *testing.T, client *Client, offer *PeerConnection) (
+	answer *webrtc.PeerConnection,
+	videoTrack *webrtc.TrackLocalStaticRTP,
+	audioTrack *webrtc.TrackLocalStaticRTP,
+) {
+	t.Helper()
+	answerPC, videoTrack, audioTrack := createTestPair(t, client)
 
 	assert.NoError(t, answerPC.SetRemoteDescription(webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
@@ -115,20 +131,21 @@ func TestPeerConnection_state(t *testing.T) {
 }
 
 func TestPeerConnection_CreatePeerConnectionInvalidConfig(t *testing.T) {
-	api, err := newAPI(Configuration{
+	callback := func(_ *PeerConnection, change ChangeCallBackType) {
+		if change == ChangeCallBackTypeStateChagne {
+			assert.Equal(t, PeerConnectionStatusClosed, change)
+		}
+	}
+	client, err := NewClient(Configuration{
 		iceServers: []webrtc.ICEServer{
 			{
 				URLs: []string{"fttp:stun.l.google.com:19302"},
 			},
 		},
-	})
+	}, callback)
 	assert.NoError(t, err)
 
-	_, err = api.NewPeerConnection(func(change ChangeCallBackType) {
-		if change == ChangeCallBackTypeStateChagne {
-			assert.Equal(t, PeerConnectionStatusClosed, change)
-		}
-	})
+	_, err = client.initPeerConnection()
 
 	assert.NotNil(t, err)
 }
@@ -186,19 +203,9 @@ func TestPeerConnection_BuildMediaEngine(t *testing.T) {
 }
 
 func TestPeerConnection_Connect(t *testing.T) {
-	api, err := newAPI(Configuration{
-		iceServers: []webrtc.ICEServer{
-			{
-				URLs: []string{"stun:stun.l.google.com:19302"},
-			},
-		},
-	})
-	assert.NoError(t, err)
-
 	ch := make(chan bool)
 	connected := false
-	var pc *PeerConnection
-	pc, err = api.NewPeerConnection(func(change ChangeCallBackType) {
+	callback := func(pc *PeerConnection, change ChangeCallBackType) {
 		if change == ChangeCallBackTypeStateChagne {
 			status := pc.GetStatus()
 
@@ -211,12 +218,21 @@ func TestPeerConnection_Connect(t *testing.T) {
 				assert.True(t, connected, "PeerConnection should be connected before closed")
 			}
 		}
-	})
+	}
+	client, err := NewClient(Configuration{
+		iceServers: []webrtc.ICEServer{
+			{
+				URLs: []string{"stun:stun.l.google.com:19302"},
+			},
+		},
+	}, callback)
+	assert.NoError(t, err)
+	pc, err := client.initPeerConnection()
 	assert.NoError(t, err)
 	assert.NotNil(t, pc)
 	assert.NotNil(t, pc.pc)
 
-	answer, _, _ := connectTestPeerConnection(t, api, pc)
+	answer, _, _ := connectTestPeerConnection(t, client, pc)
 	assert.NotNil(t, answer)
 
 	<-ch
@@ -226,19 +242,9 @@ func TestPeerConnection_Connect(t *testing.T) {
 }
 
 func TestPeerConnection_Tracks(t *testing.T) {
-	api, err := newAPI(Configuration{
-		iceServers: []webrtc.ICEServer{
-			{
-				URLs: []string{"stun:stun.l.google.com:19302"},
-			},
-		},
-	})
-	assert.NoError(t, err)
-
-	var pc *PeerConnection
 	tracksCount := &atomic.Uint32{}
 	ch := make(chan bool)
-	pc, err = api.NewPeerConnection(func(change ChangeCallBackType) {
+	callback := func(pc *PeerConnection, change ChangeCallBackType) {
 		if change == ChangeCallBackTypeStateChagne {
 			status := pc.GetStatus()
 
@@ -252,12 +258,21 @@ func TestPeerConnection_Tracks(t *testing.T) {
 				ch <- true
 			}
 		}
-	})
+	}
+	client, err := NewClient(Configuration{
+		iceServers: []webrtc.ICEServer{
+			{
+				URLs: []string{"stun:stun.l.google.com:19302"},
+			},
+		},
+	}, callback)
+	assert.NoError(t, err)
+	pc, err := client.initPeerConnection()
 	assert.NoError(t, err)
 	assert.NotNil(t, pc)
 	assert.NotNil(t, pc.pc)
 
-	answer, videoTrack, audioTrack := connectTestPeerConnection(t, api, pc)
+	answer, videoTrack, audioTrack := connectTestPeerConnection(t, client, pc)
 	assert.NotNil(t, answer)
 	assert.NotNil(t, videoTrack)
 	assert.NotNil(t, audioTrack)
@@ -312,4 +327,96 @@ func TestPeerConnection_Tracks(t *testing.T) {
 	assert.Equal(t, PeerConnectionStatusClosed, pc.GetStatus())
 	assert.True(t, video.IsClosed())
 	assert.True(t, audio.IsClosed())
+}
+
+func TestPeerConnection_WHIP(t *testing.T) {
+	ch := make(chan bool)
+	callback := func(pc *PeerConnection, change ChangeCallBackType) {
+		if change == ChangeCallBackTypeStateChagne {
+			status := pc.GetStatus()
+
+			if status == PeerConnectionStatusConnected {
+				ch <- true
+			}
+		}
+	}
+	client, err := NewClient(Configuration{
+		iceServers: []webrtc.ICEServer{
+			{
+				URLs: []string{"stun:stun.l.google.com:19302"},
+			},
+		},
+	}, callback)
+	assert.NoError(t, err)
+	testserver := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		answer, _, _ := createTestPair(t, client)
+		assert.Equal(t, "POST", req.Method)
+		mimeType, _, _ := mime.ParseMediaType(req.Header.Get("Accept"))
+		assert.Equal(t, "application/sdp", mimeType)
+		res.Header().Set("Content-Type", "application/sdp")
+
+		res.WriteHeader(http.StatusCreated)
+
+		body, readErr := io.ReadAll(req.Body)
+		assert.NoError(t, readErr)
+		assert.NotEmpty(t, body)
+
+		gather := webrtc.GatheringCompletePromise(answer)
+		assert.NoError(t, answer.SetRemoteDescription(webrtc.SessionDescription{
+			Type: webrtc.SDPTypeOffer,
+			SDP:  string(body),
+		}))
+		answerDesc, answerErr := answer.CreateAnswer(nil)
+		assert.NoError(t, answerErr)
+		assert.NoError(t, answer.SetLocalDescription(answerDesc))
+		<-gather
+
+		_, readErr = res.Write([]byte(answer.LocalDescription().SDP))
+		assert.NoError(t, readErr)
+	}))
+	assert.NoError(t, err)
+	client.httpClient = testserver.Client()
+	pc, err := client.NewPeerConnection(context.Background(), testserver.URL)
+	assert.NoError(t, err)
+	assert.NotNil(t, pc)
+
+	<-ch
+	assert.NoError(t, pc.Close())
+}
+
+func TestPeerConnection_WHIPError(t *testing.T) {
+	ch := make(chan bool)
+	callback := func(pc *PeerConnection, change ChangeCallBackType) {
+		if change == ChangeCallBackTypeStateChagne {
+			status := pc.GetStatus()
+
+			assert.NotEqual(t, PeerConnectionStatusConnected, status)
+			if status == PeerConnectionStatusClosed {
+				ch <- true
+			}
+		}
+	}
+	client, err := NewClient(Configuration{
+		iceServers: []webrtc.ICEServer{
+			{
+				URLs: []string{"stun:stun.l.google.com:19302"},
+			},
+		},
+	}, callback)
+	assert.NoError(t, err)
+	testserver := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		assert.Equal(t, "POST", req.Method)
+		mimeType, _, _ := mime.ParseMediaType(req.Header.Get("Accept"))
+		assert.Equal(t, "application/sdp", mimeType)
+		res.Header().Set("Content-Type", "application/sdp")
+
+		res.WriteHeader(http.StatusBadRequest)
+	}))
+	assert.NoError(t, err)
+	client.httpClient = testserver.Client()
+	pc, err := client.NewPeerConnection(context.Background(), testserver.URL)
+	assert.Error(t, err)
+	assert.Nil(t, pc)
+
+	<-ch
 }

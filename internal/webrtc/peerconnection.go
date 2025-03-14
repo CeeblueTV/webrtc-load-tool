@@ -1,8 +1,11 @@
 package webrtc
 
 import (
+	"context"
+	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pion/webrtc/v4"
 )
@@ -60,15 +63,19 @@ type Configuration struct {
 	VideoCodec VideoCodec
 }
 
-// API represents the WebRTC API for creating PeerConnections
+// Client represents the WebRTC Client for creating PeerConnections
 // Based on the Pion WebRTC API and WHIP signaling.
-type API struct {
+type Client struct {
 	api        *webrtc.API
+	httpClient *http.Client
+	callback   ChangeCallback
 	iceServers []webrtc.ICEServer
 	videoCodec VideoCodec
 }
 
-func newAPI(config Configuration) (*API, error) {
+// NewClient creates a new WebRTC Client with the given configuration.
+// It handles the creation of PeerConnections and the signaling over WHIP.
+func NewClient(config Configuration, callback ChangeCallback) (*Client, error) {
 	mediaEngine, err := buildMediaEngine(config.VideoCodec)
 	if err != nil {
 		return nil, err
@@ -76,10 +83,14 @@ func newAPI(config Configuration) (*API, error) {
 
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine))
 
-	return &API{
+	return &Client{
 		api:        api,
 		iceServers: config.iceServers,
 		videoCodec: config.VideoCodec,
+		httpClient: &http.Client{
+			Timeout: 5 * time.Second,
+		},
+		callback: callback,
 	}, nil
 }
 
@@ -138,8 +149,32 @@ func buildMediaEngine(codec VideoCodec) (mediaEngine *webrtc.MediaEngine, err er
 	return mediaEngine, nil
 }
 
+// NewPeerConnection creates a new PeerConnection and handles WHIP signaling.
+func (a *Client) NewPeerConnection(ctx context.Context, whipEndpoint string) (*PeerConnection, error) {
+	peer, err := a.initPeerConnection()
+	if err != nil {
+		return nil, err
+	}
+
+	answer, err := whip(ctx, a.httpClient, whipEndpoint, peer.GetOffer())
+	if err != nil {
+		closeErr := peer.pc.Close()
+		if closeErr != nil {
+			return nil, err
+		}
+
+		return nil, err
+	}
+
+	if err := peer.SetAnswer(answer); err != nil {
+		return nil, err
+	}
+
+	return peer, nil
+}
+
 // ChangeCallback is a callback function that is called when the PeerConnection changes.
-type ChangeCallback func(change ChangeCallBackType)
+type ChangeCallback func(peer *PeerConnection, change ChangeCallBackType)
 
 // ChangeCallBackType represents the type of change in the PeerConnection.
 type ChangeCallBackType int
@@ -151,10 +186,10 @@ const (
 	ChangeCallBackTypeNewTrack
 )
 
-// NewPeerConnection creates a new PeerConnection with video and audio
+// initPeerConnection creates a new PeerConnection with video and audio
 // transceivers, wait for the gather of ICE candidates and return the
 // PeerConnection.
-func (a *API) NewPeerConnection(callback ChangeCallback) (*PeerConnection, error) {
+func (a *Client) initPeerConnection() (*PeerConnection, error) {
 	pc, err := a.api.NewPeerConnection(webrtc.Configuration{
 		ICEServers: a.iceServers,
 	})
@@ -165,7 +200,7 @@ func (a *API) NewPeerConnection(callback ChangeCallback) (*PeerConnection, error
 	peer := &PeerConnection{
 		pc:       pc,
 		state:    new(atomic.Int32),
-		callback: callback,
+		callback: a.callback,
 		mu:       new(sync.RWMutex),
 	}
 
@@ -246,7 +281,12 @@ func (p *PeerConnection) handleConnectionStateChange(state webrtc.PeerConnection
 		p.setStatus(PeerConnectionStatusClosed)
 	}
 
-	p.callback(ChangeCallBackTypeStateChagne)
+	p.callback(p, ChangeCallBackTypeStateChagne)
+}
+
+// Close closes the underlying PeerConnection.
+func (p *PeerConnection) Close() error {
+	return p.pc.Close()
 }
 
 func (p *PeerConnection) handleTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
@@ -255,7 +295,7 @@ func (p *PeerConnection) handleTrack(track *webrtc.TrackRemote, _ *webrtc.RTPRec
 	p.tracks = append(p.tracks, info)
 	p.mu.Unlock()
 
-	p.callback(ChangeCallBackTypeNewTrack)
+	p.callback(p, ChangeCallBackTypeNewTrack)
 }
 
 // TrackInfo represents the information of a track in a PeerConnection.

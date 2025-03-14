@@ -46,7 +46,8 @@ func TestWhip(t *testing.T) {
 		w.Header().Set("Content-Type", "application/sdp")
 
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(answer))
+		_, err := w.Write([]byte(answer))
+		assert.NoError(t, err)
 	}))
 	res, err := whip(context.TODO(), testServer.Client(), testServer.URL, offer)
 	assert.NoError(t, err)
