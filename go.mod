@@ -5,6 +5,7 @@ go 1.23.4
 require (
 	github.com/pion/rtp v1.8.12
 	github.com/pion/webrtc/v4 v4.0.13
+	github.com/spf13/pflag v1.0.6
 	github.com/stretchr/testify v1.10.0
 )
 
