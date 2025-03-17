@@ -29,7 +29,7 @@ func TestParseFlags_WhipURL(t *testing.T) {
 
 	flags = initFlags()
 	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", testurl}))
-	assert.Equal(t, testurl, flags.WhipURL)
+	assert.Equal(t, testurl, flags.WhipEndpoint)
 }
 
 func TestParseFlags_ParseHumanReadableNumber(t *testing.T) {
@@ -164,4 +164,45 @@ func TestFlagSet(t *testing.T) {
 	assert.Equal(t, "no", RelayModeNo.String())
 	assert.Equal(t, "only", RelayModeOnly.String())
 	assert.Equal(t, "unknown", relayMode(42).String())
+}
+
+func TestRelayModeICEServers(t *testing.T) {
+	flags := initFlags()
+	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", testurl, "--relaymode", "only"}))
+	turnIce := flags.ICEServers()
+	assert.NotEmpty(t, turnIce)
+	for _, server := range turnIce {
+		assert.NotEmpty(t, server.Username)
+		assert.NotEmpty(t, server.Credential)
+		for _, url := range server.URLs {
+			assert.Equal(t, "turn:", url[:5])
+		}
+	}
+
+	flags = initFlags()
+	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", testurl, "--relaymode", "no"}))
+	stunIce := flags.ICEServers()
+	assert.NotEmpty(t, stunIce)
+	for _, server := range stunIce {
+		for _, url := range server.URLs {
+			assert.Equal(t, "stun:", url[:5])
+		}
+	}
+
+	flags = initFlags()
+	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", testurl, "--relaymode", "auto"}))
+	ice := flags.ICEServers()
+	assert.GreaterOrEqual(t, len(ice), 1)
+	assert.ElementsMatch(t, append(stunIce, turnIce...), ice)
+}
+
+func TestFlagsRunnerConfig(t *testing.T) {
+	flags := initFlags()
+	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", testurl, "-c", "3", "-d", "3s"}))
+	config := flags.RunnerConfig()
+	assert.Equal(t, testurl, config.WhipEndpoint)
+	assert.Equal(t, uint(3), config.Connections)
+	assert.Equal(t, time.Second*3, config.Duration)
+	assert.Equal(t, time.Duration(0), config.Runup)
+	assert.NotEmpty(t, config.ICEServers)
 }

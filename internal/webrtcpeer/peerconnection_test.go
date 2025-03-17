@@ -131,13 +131,17 @@ func TestPeerConnection_state(t *testing.T) {
 }
 
 func TestPeerConnection_CreatePeerConnectionInvalidConfig(t *testing.T) {
-	callback := func(_ *PeerConnection, change ChangeCallBackType) {
+	callback := func(p *PeerConnection, change ChangeCallBackType, data any) {
 		if change == ChangeCallBackTypeStateChagne {
-			assert.Equal(t, PeerConnectionStatusClosed, change)
+			state, ok := data.(PeerConnectionStatus)
+			assert.True(t, ok)
+
+			assert.Equal(t, PeerConnectionStatusClosed, state)
+			assert.Equal(t, PeerConnectionStatusClosed, p.GetStatus())
 		}
 	}
 	client, err := NewClient(Configuration{
-		iceServers: []webrtc.ICEServer{
+		ICEServers: []webrtc.ICEServer{
 			{
 				URLs: []string{"fttp:stun.l.google.com:19302"},
 			},
@@ -205,9 +209,12 @@ func TestPeerConnection_BuildMediaEngine(t *testing.T) {
 func TestPeerConnection_Connect(t *testing.T) {
 	ch := make(chan bool)
 	connected := false
-	callback := func(pc *PeerConnection, change ChangeCallBackType) {
+	callback := func(pc *PeerConnection, change ChangeCallBackType, data any) {
 		if change == ChangeCallBackTypeStateChagne {
 			status := pc.GetStatus()
+			state, ok := data.(PeerConnectionStatus)
+			assert.True(t, ok)
+			assert.Equal(t, status, state)
 
 			if status == PeerConnectionStatusConnected {
 				connected = true
@@ -220,7 +227,7 @@ func TestPeerConnection_Connect(t *testing.T) {
 		}
 	}
 	client, err := NewClient(Configuration{
-		iceServers: []webrtc.ICEServer{
+		ICEServers: []webrtc.ICEServer{
 			{
 				URLs: []string{"stun:stun.l.google.com:19302"},
 			},
@@ -244,9 +251,12 @@ func TestPeerConnection_Connect(t *testing.T) {
 func TestPeerConnection_Tracks(t *testing.T) {
 	tracksCount := &atomic.Uint32{}
 	ch := make(chan bool)
-	callback := func(pc *PeerConnection, change ChangeCallBackType) {
+	callback := func(pc *PeerConnection, change ChangeCallBackType, data any) {
 		if change == ChangeCallBackTypeStateChagne {
 			status := pc.GetStatus()
+			state, ok := data.(PeerConnectionStatus)
+			assert.True(t, ok)
+			assert.Equal(t, status, state)
 
 			if status == PeerConnectionStatusConnected {
 				ch <- true
@@ -254,13 +264,17 @@ func TestPeerConnection_Tracks(t *testing.T) {
 		}
 
 		if change == ChangeCallBackTypeNewTrack {
+			trackInfo, ok := data.(TrackInfo)
+			assert.True(t, ok)
+			assert.NotNil(t, trackInfo)
+
 			if tracksCount.Add(1) >= 2 {
 				ch <- true
 			}
 		}
 	}
 	client, err := NewClient(Configuration{
-		iceServers: []webrtc.ICEServer{
+		ICEServers: []webrtc.ICEServer{
 			{
 				URLs: []string{"stun:stun.l.google.com:19302"},
 			},
@@ -303,10 +317,10 @@ func TestPeerConnection_Tracks(t *testing.T) {
 	tracks := pc.GetTracks()
 
 	assert.Len(t, tracks, 2)
-	var audio, video *TrackInfo
+	var audio, video TrackInfo
 
 	for _, track := range tracks {
-		switch track.Kind {
+		switch track.Kind() {
 		case webrtc.RTPCodecTypeAudio:
 			assert.Nil(t, audio, "Got multiple audio tracks")
 			audio = track
@@ -331,9 +345,12 @@ func TestPeerConnection_Tracks(t *testing.T) {
 
 func TestPeerConnection_WHIP(t *testing.T) {
 	ch := make(chan bool)
-	callback := func(pc *PeerConnection, change ChangeCallBackType) {
+	callback := func(pc *PeerConnection, change ChangeCallBackType, data any) {
 		if change == ChangeCallBackTypeStateChagne {
 			status := pc.GetStatus()
+			state, ok := data.(PeerConnectionStatus)
+			assert.True(t, ok)
+			assert.Equal(t, status, state)
 
 			if status == PeerConnectionStatusConnected {
 				ch <- true
@@ -341,7 +358,7 @@ func TestPeerConnection_WHIP(t *testing.T) {
 		}
 	}
 	client, err := NewClient(Configuration{
-		iceServers: []webrtc.ICEServer{
+		ICEServers: []webrtc.ICEServer{
 			{
 				URLs: []string{"stun:stun.l.google.com:19302"},
 			},
@@ -386,9 +403,12 @@ func TestPeerConnection_WHIP(t *testing.T) {
 
 func TestPeerConnection_WHIPError(t *testing.T) {
 	ch := make(chan bool)
-	callback := func(pc *PeerConnection, change ChangeCallBackType) {
+	callback := func(pc *PeerConnection, change ChangeCallBackType, data any) {
 		if change == ChangeCallBackTypeStateChagne {
 			status := pc.GetStatus()
+			state, ok := data.(PeerConnectionStatus)
+			assert.True(t, ok)
+			assert.Equal(t, status, state)
 
 			assert.NotEqual(t, PeerConnectionStatusConnected, status)
 			if status == PeerConnectionStatusClosed {
@@ -397,7 +417,7 @@ func TestPeerConnection_WHIPError(t *testing.T) {
 		}
 	}
 	client, err := NewClient(Configuration{
-		iceServers: []webrtc.ICEServer{
+		ICEServers: []webrtc.ICEServer{
 			{
 				URLs: []string{"stun:stun.l.google.com:19302"},
 			},

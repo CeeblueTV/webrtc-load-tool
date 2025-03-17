@@ -59,8 +59,9 @@ const (
 
 // Configuration represents the configuration of a PeerConnection.
 type Configuration struct {
-	iceServers []webrtc.ICEServer
-	VideoCodec VideoCodec
+	ICEServers         []webrtc.ICEServer
+	ICETransportPolicy webrtc.ICETransportPolicy
+	VideoCodec         VideoCodec
 }
 
 // Client represents the WebRTC Client for creating PeerConnections
@@ -70,6 +71,7 @@ type Client struct {
 	httpClient *http.Client
 	callback   ChangeCallback
 	iceServers []webrtc.ICEServer
+	icePolicy  webrtc.ICETransportPolicy
 	videoCodec VideoCodec
 }
 
@@ -85,7 +87,8 @@ func NewClient(config Configuration, callback ChangeCallback) (*Client, error) {
 
 	return &Client{
 		api:        api,
-		iceServers: config.iceServers,
+		iceServers: config.ICEServers,
+		icePolicy:  config.ICETransportPolicy,
 		videoCodec: config.VideoCodec,
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
@@ -174,7 +177,7 @@ func (a *Client) NewPeerConnection(ctx context.Context, whipEndpoint string) (*P
 }
 
 // ChangeCallback is a callback function that is called when the PeerConnection changes.
-type ChangeCallback func(peer *PeerConnection, change ChangeCallBackType)
+type ChangeCallback func(peer *PeerConnection, change ChangeCallBackType, data any)
 
 // ChangeCallBackType represents the type of change in the PeerConnection.
 type ChangeCallBackType int
@@ -191,7 +194,8 @@ const (
 // PeerConnection.
 func (a *Client) initPeerConnection() (*PeerConnection, error) {
 	pc, err := a.api.NewPeerConnection(webrtc.Configuration{
-		ICEServers: a.iceServers,
+		ICEServers:         a.iceServers,
+		ICETransportPolicy: a.icePolicy,
 	})
 	if err != nil {
 		return nil, err
@@ -219,6 +223,8 @@ func (a *Client) initPeerConnection() (*PeerConnection, error) {
 		return nil, err
 	}
 
+	go peer.handleConnectionStateChange(webrtc.PeerConnectionStateNew)
+
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
 		return nil, err
@@ -239,7 +245,7 @@ type PeerConnection struct {
 	state    *atomic.Int32
 	callback ChangeCallback
 	mu       *sync.RWMutex
-	tracks   []*TrackInfo
+	tracks   []TrackInfo
 }
 
 // GetStatus returns the current status of the PeerConnection.
@@ -267,21 +273,36 @@ func (p *PeerConnection) SetAnswer(answer string) error {
 }
 
 func (p *PeerConnection) handleConnectionStateChange(state webrtc.PeerConnectionState) {
+	var status PeerConnectionStatus
 	switch state {
-	case webrtc.PeerConnectionStateNew,
-		webrtc.PeerConnectionStateConnecting,
+	case webrtc.PeerConnectionStateNew:
+		status = PeerConnectionStatusNew
+	case webrtc.PeerConnectionStateConnecting,
 		webrtc.PeerConnectionStateUnknown:
-		p.setStatus(PeerConnectionStatusNew)
+		status = PeerConnectionStatusConnecting
 	case webrtc.PeerConnectionStateConnected:
-		p.setStatus(PeerConnectionStatusConnected)
+		status = PeerConnectionStatusConnected
 	case webrtc.PeerConnectionStateDisconnected:
-		p.setStatus(PeerConnectionStatusDisconnected)
+		status = PeerConnectionStatusDisconnected
 	case webrtc.PeerConnectionStateClosed,
 		webrtc.PeerConnectionStateFailed:
-		p.setStatus(PeerConnectionStatusClosed)
+		status = PeerConnectionStatusClosed
+		p.closeAllTracks()
 	}
 
-	p.callback(p, ChangeCallBackTypeStateChagne)
+	p.setStatus(status)
+	p.callback(p, ChangeCallBackTypeStateChagne, status)
+}
+
+func (p *PeerConnection) closeAllTracks() {
+	p.mu.Lock()
+	for _, track := range p.tracks {
+		t, ok := track.(*trackInfoImpl)
+		if ok {
+			t.setClosed()
+		}
+	}
+	p.mu.Unlock()
 }
 
 // Close closes the underlying PeerConnection.
@@ -295,30 +316,44 @@ func (p *PeerConnection) handleTrack(track *webrtc.TrackRemote, _ *webrtc.RTPRec
 	p.tracks = append(p.tracks, info)
 	p.mu.Unlock()
 
-	p.callback(p, ChangeCallBackTypeNewTrack)
+	p.callback(p, ChangeCallBackTypeNewTrack, info)
 }
 
-// TrackInfo represents the information of a track in a PeerConnection.
-type TrackInfo struct {
-	trackRemote *webrtc.TrackRemote
-	rtpPackets  *atomic.Uint64
-	closed      *atomic.Bool
-	MimeType    string
-	Kind        webrtc.RTPCodecType
+// TrackInfo represents the information of a media track in a PeerConnection.
+type TrackInfo interface {
+	// MimeType returns the MIME type of the track.
+	MimeType() string
+	// Kind returns the kind of the track.
+	Kind() webrtc.RTPCodecType
+	// GetPacketsCount returns the number of RTP packets received by the track during its lifetime.
+	GetPacketsCount() uint64
+	// GetBytesCount returns the number of bytes received by the track during its lifetime.
+	GetBytesCount() uint64
+	// IsClosed returns whether the track is closed.
+	IsClosed() bool
 }
 
-func newTrackInfo(track *webrtc.TrackRemote) *TrackInfo {
-	info := &TrackInfo{
-		MimeType:    track.Codec().MimeType,
-		Kind:        track.Kind(),
+type trackInfoImpl struct {
+	trackRemote           *webrtc.TrackRemote
+	rtpPackets, rtpBuffer *atomic.Uint64
+	closed                *atomic.Bool
+	mimeType              string
+	kind                  webrtc.RTPCodecType
+}
+
+func newTrackInfo(track *webrtc.TrackRemote) TrackInfo {
+	info := &trackInfoImpl{
+		mimeType:    track.Codec().MimeType,
+		kind:        track.Kind(),
 		trackRemote: track,
-		rtpPackets:  new(atomic.Uint64),
-		closed:      new(atomic.Bool),
+		rtpPackets:  &atomic.Uint64{},
+		rtpBuffer:   &atomic.Uint64{},
+		closed:      &atomic.Bool{},
 	}
 
 	go func() {
 		for {
-			_, _, err := track.ReadRTP()
+			p, _, err := track.ReadRTP()
 			if err != nil {
 				info.setClosed()
 
@@ -326,37 +361,54 @@ func newTrackInfo(track *webrtc.TrackRemote) *TrackInfo {
 			}
 
 			info.increasePacketCount()
+			//nolint:gosec // G115 no overflows possible
+			info.increaseBufferCount(uint64(len(p.Payload)) + uint64(p.Header.MarshalSize()))
 		}
 	}()
 
 	return info
 }
 
-func (t *TrackInfo) increasePacketCount() {
+func (t *trackInfoImpl) MimeType() string {
+	return t.mimeType
+}
+
+func (t *trackInfoImpl) Kind() webrtc.RTPCodecType {
+	return t.kind
+}
+
+func (t *trackInfoImpl) increasePacketCount() {
 	t.rtpPackets.Add(1)
 }
 
-// GetPacketsCount returns the number of RTP packets received by the track during its lifetime.
-func (t *TrackInfo) GetPacketsCount() uint64 {
+func (t *trackInfoImpl) increaseBufferCount(size uint64) {
+	t.rtpBuffer.Add(size)
+}
+
+func (t *trackInfoImpl) GetPacketsCount() uint64 {
 	return t.rtpPackets.Load()
 }
 
+func (t *trackInfoImpl) GetBytesCount() uint64 {
+	return t.rtpBuffer.Load()
+}
+
 // GetTracks returns the info objects of the tracks in the PeerConnection.
-func (p *PeerConnection) GetTracks() []*TrackInfo {
+func (p *PeerConnection) GetTracks() []TrackInfo {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	copyTracks := make([]*TrackInfo, len(p.tracks))
+	copyTracks := make([]TrackInfo, len(p.tracks))
 	copy(copyTracks, p.tracks)
 
 	return copyTracks
 }
 
-func (t *TrackInfo) setClosed() {
+func (t *trackInfoImpl) setClosed() {
 	t.closed.Store(true)
 }
 
 // IsClosed returns whether the track is closed.
-func (t *TrackInfo) IsClosed() bool {
+func (t *trackInfoImpl) IsClosed() bool {
 	return t.closed.Load()
 }

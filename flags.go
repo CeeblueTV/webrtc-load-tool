@@ -7,6 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CeeblueTV/webrtc-load-tool/internal/runner"
+	"github.com/pion/webrtc/v4"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/pflag"
 )
 
@@ -18,7 +21,7 @@ type flags struct {
 	durationVal    *time.Duration
 	relayModeVal   *string
 	// whipURL is the URL of the WHIP server.
-	WhipURL string
+	WhipEndpoint string
 	// Connections is the maximum number of connections to create.
 	// Default is 1.
 	Connections uint
@@ -133,7 +136,7 @@ func (f *flags) parseWhipURL() error {
 		return fmt.Errorf("%w: scheme must be http(s)", errInvalidWhipURL)
 	}
 
-	f.WhipURL = whip
+	f.WhipEndpoint = whip
 
 	return nil
 }
@@ -221,4 +224,65 @@ func (f *flags) parseRelayMode() error {
 	}
 
 	return nil
+}
+
+func (f *flags) ICEServers() []webrtc.ICEServer {
+	stun := []webrtc.ICEServer{
+		{
+			URLs: []string{"stun:stun.l.google.com:19302"},
+		},
+	}
+
+	if f.RelayMode == RelayModeNo {
+		return stun
+	}
+
+	turn, err := f.turnICEServers()
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get TURN servers, using stun only")
+
+		return stun
+	}
+
+	if f.RelayMode == RelayModeAuto {
+		return append(stun, turn...)
+	}
+
+	return turn
+}
+
+func (f *flags) turnICEServers() ([]webrtc.ICEServer, error) {
+	u, err := url.Parse(f.WhipEndpoint)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", errInvalidWhipURL, err) //nolint:errorlint // we wrap the error
+	}
+
+	domain := u.Hostname()
+
+	return []webrtc.ICEServer{
+		{
+			URLs: []string{
+				"turn:" + domain + ":3478",
+				"turn:" + domain + ":3478?transport=tcp",
+			},
+			Username:   "ceeblue",
+			Credential: "ceeblue",
+		},
+	}, nil
+}
+
+func (f *flags) RunnerConfig() runner.Config {
+	transportPolicy := webrtc.ICETransportPolicyAll
+	if f.RelayMode == RelayModeOnly {
+		transportPolicy = webrtc.ICETransportPolicyRelay
+	}
+
+	return runner.Config{
+		ICEServers:         f.ICEServers(),
+		ICETransportPolicy: transportPolicy,
+		WhipEndpoint:       f.WhipEndpoint,
+		Connections:        f.Connections,
+		Runup:              f.Runup,
+		Duration:           f.Duration,
+	}
 }
