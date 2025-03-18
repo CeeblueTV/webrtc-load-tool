@@ -388,11 +388,11 @@ func (r *runnerImpl) logChange() {
 
 	if stats.AudioBytesDelta > 0 {
 		msg = msg.
-			Str("Audio_Bandwidth", formatBits(stats.VideoBytesDelta)+"s")
+			Str("Audio_Bandwidth", formatBits(stats.AudioBytesDelta)+"s")
 
 		if audioTracks > 1 {
 			msg = msg.
-				Str("Audio_Average", formatBits(stats.VideoBytesDelta/uint64(audioTracks))+"s")
+				Str("Audio_Average", formatBits(stats.AudioBytesDelta/uint64(audioTracks))+"s")
 		}
 	}
 
