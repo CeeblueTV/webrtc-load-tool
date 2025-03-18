@@ -159,6 +159,20 @@ func TestParseFlags_parseRelayMode(t *testing.T) {
 	assert.ErrorIs(t, flags.Parse([]string{"webrtc-load-tool", testurl, "--relaymode", ""}), errInvalidRelayMode)
 }
 
+func TestParseFlags_parseLiteMode(t *testing.T) {
+	flags := initFlags()
+	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", testurl}))
+	assert.Equal(t, false, flags.LiteMode, "default lite mode should be disabled by default")
+
+	flags = initFlags()
+	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", testurl, "-l"}))
+	assert.Equal(t, true, flags.LiteMode)
+
+	flags = initFlags()
+	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", testurl, "--lite"}))
+	assert.Equal(t, true, flags.LiteMode)
+}
+
 func TestFlagSet(t *testing.T) {
 	assert.Equal(t, "auto", RelayModeAuto.String())
 	assert.Equal(t, "no", RelayModeNo.String())
@@ -198,11 +212,12 @@ func TestRelayModeICEServers(t *testing.T) {
 
 func TestFlagsRunnerConfig(t *testing.T) {
 	flags := initFlags()
-	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", testurl, "-c", "3", "-d", "3s"}))
+	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", testurl, "-c", "3", "-d", "3s", "-l"}))
 	config := flags.RunnerConfig()
 	assert.Equal(t, testurl, config.WhipEndpoint)
 	assert.Equal(t, uint(3), config.Connections)
 	assert.Equal(t, time.Second*3, config.Duration)
 	assert.Equal(t, time.Duration(0), config.Runup)
+	assert.True(t, config.LiteMode)
 	assert.NotEmpty(t, config.ICEServers)
 }

@@ -13,6 +13,8 @@ webrtc-load-tool WHIP-URL [flags]
   Maximum number of connections to create (default: `"1"`)  
 - `-d, --duration duration`  
   Time to run the test (default: `1m0s`)  
+- `-l, --lite`  
+Lite mode, no Video or Audio handling
 - `-m, --relaymode string`  
   Relay mode to use (`auto`, `no`, `only`) (default: `"auto"`)  
 - `-r, --runup duration`  

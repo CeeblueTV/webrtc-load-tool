@@ -42,6 +42,8 @@ type Config struct {
 	Runup time.Duration
 	// Duration is the time to run the test.
 	Duration time.Duration
+	// LiteMode If enabled no Video or Audio handling.
+	LiteMode bool
 }
 
 type callbacks struct {
@@ -263,6 +265,7 @@ func New(config Config) (Runner, error) {
 	handle, err := newWebRTCHandler(webrtcpeer.Configuration{
 		ICEServers:         config.ICEServers,
 		ICETransportPolicy: config.ICETransportPolicy,
+		LiteMode:           config.LiteMode,
 	}, config.WhipEndpoint, cb)
 	if err != nil {
 		return nil, err
@@ -356,50 +359,69 @@ func (r *runnerImpl) logger(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info().
-				Str("Total_Connections", humanize.Comma(r.callbacks.TotalConnections.Load())).
-				Str("Total_Video_Tracks", humanize.Comma(r.callbacks.TotalVideoTracks.Load())).
-				Str("Total_Audio_Tracks", humanize.Comma(r.callbacks.TotalAudioTracks.Load())).
-				//nolint:gosec // G115
-				Str("Total_Video_Packets", humanize.Comma(int64(r.callbacks.TotalVideoPackets.Load()))).
-				//nolint:gosec // G115
-				Str("Total_Audio_Packets", humanize.Comma(int64(r.callbacks.TotalAudioPackets.Load()))).
-				Str("Total_Video_Bytes", humanize.Bytes(r.callbacks.TotalVideoBytes.Load())).
-				Str("Total_Audio_Bytes", humanize.Bytes(r.callbacks.TotalAudioBytes.Load())).
-				Str("Connections", r.callbacks.CountConnections().String()).
-				Msg("Test run finished")
+			r.sumLog()
 
 			return
 		case <-tick.C:
-			stats := r.callbacks.GetTracksPacketsDelta()
-			videoTracks := r.callbacks.CurrentVideoTracks.Load()
-			audioTracks := r.callbacks.CurrentAudioTracks.Load()
-
-			videoSpeed := formatBits(stats.VideoBytesDelta) + "s"
-			if videoTracks > 1 {
-				videoSpeed += " average " + formatBits(stats.VideoBytesDelta/uint64(videoTracks)) + "s"
-			}
-
-			audioSpeed := formatBits(stats.AudioBytesDelta) + "s"
-			if audioTracks > 1 {
-				audioSpeed += " average " + formatBits(stats.AudioBytesDelta/uint64(audioTracks)) + "s"
-			}
-
-			log.Info().
-				Str("Connections", r.callbacks.CountConnections().String()).
-				Int64("Video_Tracks", r.callbacks.CurrentVideoTracks.Load()).
-				Int64("Audio_Tracks", r.callbacks.CurrentAudioTracks.Load()).
-				Str(
-					"Video_Stream",
-					videoSpeed,
-				).
-				Str(
-					"Audio_Stream",
-					audioSpeed,
-				).
-				Msg("Stats")
+			r.logChange()
 		}
 	}
+}
+
+func (r *runnerImpl) logChange() {
+	stats := r.callbacks.GetTracksPacketsDelta()
+	videoTracks := r.callbacks.CurrentVideoTracks.Load()
+	audioTracks := r.callbacks.CurrentAudioTracks.Load()
+
+	msg := log.Info().
+		Str("Connections", r.callbacks.CountConnections().String())
+
+	if videoTracks > 0 {
+		msg = msg.
+			Str("Video_Tracks", humanize.Comma(videoTracks))
+	}
+
+	if audioTracks > 0 {
+		msg = msg.
+			Str("Audio_Tracks", humanize.Comma(audioTracks))
+	}
+
+	if stats.AudioBytesDelta > 0 {
+		msg = msg.
+			Str("Audio_Bandwidth", formatBits(stats.VideoBytesDelta)+"s")
+
+		if audioTracks > 1 {
+			msg = msg.
+				Str("Audio_Average", formatBits(stats.VideoBytesDelta/uint64(audioTracks))+"s")
+		}
+	}
+
+	if stats.VideoBytesDelta > 0 {
+		msg = msg.
+			Str("Video_Bandwidth", formatBits(stats.VideoBytesDelta)+"s")
+
+		if videoTracks > 1 {
+			msg = msg.
+				Str("Video_Average", formatBits(stats.VideoBytesDelta/uint64(videoTracks))+"s")
+		}
+	}
+
+	msg.Msg("Stats")
+}
+
+func (r *runnerImpl) sumLog() {
+	log.Info().
+		Str("Total_Connections", humanize.Comma(r.callbacks.TotalConnections.Load())).
+		Str("Total_Video_Tracks", humanize.Comma(r.callbacks.TotalVideoTracks.Load())).
+		Str("Total_Audio_Tracks", humanize.Comma(r.callbacks.TotalAudioTracks.Load())).
+		//nolint:gosec // G115
+		Str("Total_Video_Packets", humanize.Comma(int64(r.callbacks.TotalVideoPackets.Load()))).
+		//nolint:gosec // G115
+		Str("Total_Audio_Packets", humanize.Comma(int64(r.callbacks.TotalAudioPackets.Load()))).
+		Str("Total_Video_Bytes", humanize.Bytes(r.callbacks.TotalVideoBytes.Load())).
+		Str("Total_Audio_Bytes", humanize.Bytes(r.callbacks.TotalAudioBytes.Load())).
+		Str("Connections", r.callbacks.CountConnections().String()).
+		Msg("Test run finished")
 }
 
 func formatBits(bits uint64) string {

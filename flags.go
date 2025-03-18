@@ -20,6 +20,7 @@ type flags struct {
 	runupVal       *time.Duration
 	durationVal    *time.Duration
 	relayModeVal   *string
+	liteModeVal    *bool
 	// whipURL is the URL of the WHIP server.
 	WhipEndpoint string
 	// Connections is the maximum number of connections to create.
@@ -34,6 +35,8 @@ type flags struct {
 	// RelayMode is the relay mode to use, default is auto.
 	// possible values: auto, no, only
 	RelayMode relayMode
+	// LiteMode If enabled no Video or Audio handling.
+	LiteMode bool
 }
 
 type relayMode int
@@ -69,6 +72,7 @@ func initFlags() *flags {
 		runupVal:       flagset.DurationP("runup", "r", 0, "time frame to create maximum number of connections"),
 		durationVal:    flagset.DurationP("duration", "d", time.Minute, "time to run the test"),
 		relayModeVal:   flagset.StringP("relaymode", "m", "auto", "relay mode to use (auto, no, only)"),
+		liteModeVal:    flagset.BoolP("lite", "l", false, "lite mode, no Video or Audio handling"),
 	}
 
 	return f
@@ -80,7 +84,7 @@ func (f *flags) PrintDefaults() {
 }
 
 // ParseFlags parses webrtc-load-tool command line flags.
-func (f *flags) Parse(args []string) error {
+func (f *flags) Parse(args []string) error { //nolint:cyclop
 	if len(args) == 0 {
 		return errShortArgs
 	}
@@ -116,6 +120,10 @@ func (f *flags) Parse(args []string) error {
 		if f.Duration <= 0 {
 			return fmt.Errorf("%w: duration must be greater than 0", errInvalidDuration)
 		}
+	}
+
+	if f.liteModeVal != nil {
+		f.LiteMode = *f.liteModeVal
 	}
 
 	return nil
@@ -280,6 +288,7 @@ func (f *flags) RunnerConfig() runner.Config {
 	return runner.Config{
 		ICEServers:         f.ICEServers(),
 		ICETransportPolicy: transportPolicy,
+		LiteMode:           f.LiteMode,
 		WhipEndpoint:       f.WhipEndpoint,
 		Connections:        f.Connections,
 		Runup:              f.Runup,

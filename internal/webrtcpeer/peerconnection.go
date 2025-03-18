@@ -61,6 +61,7 @@ const (
 type Configuration struct {
 	ICEServers         []webrtc.ICEServer
 	ICETransportPolicy webrtc.ICETransportPolicy
+	LiteMode           bool
 	VideoCodec         VideoCodec
 }
 
@@ -72,6 +73,7 @@ type Client struct {
 	callback   ChangeCallback
 	iceServers []webrtc.ICEServer
 	icePolicy  webrtc.ICETransportPolicy
+	liteMode   bool
 	videoCodec VideoCodec
 }
 
@@ -89,6 +91,7 @@ func NewClient(config Configuration, callback ChangeCallback) (*Client, error) {
 		api:        api,
 		iceServers: config.ICEServers,
 		icePolicy:  config.ICETransportPolicy,
+		liteMode:   config.LiteMode,
 		videoCodec: config.VideoCodec,
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
@@ -209,7 +212,9 @@ func (a *Client) initPeerConnection() (*PeerConnection, error) {
 	}
 
 	pc.OnConnectionStateChange(peer.handleConnectionStateChange)
-	pc.OnTrack(peer.handleTrack)
+	if !a.liteMode {
+		pc.OnTrack(peer.handleTrack)
+	}
 
 	if _, err = pc.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo, webrtc.RTPTransceiverInit{
 		Direction: webrtc.RTPTransceiverDirectionRecvonly,
