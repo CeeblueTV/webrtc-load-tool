@@ -4,6 +4,7 @@ package runner
 
 import (
 	"context"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -374,14 +375,14 @@ func (r *runnerImpl) logger(ctx context.Context) {
 			videoTracks := r.callbacks.CurrentVideoTracks.Load()
 			audioTracks := r.callbacks.CurrentAudioTracks.Load()
 
-			videoSpeed := humanize.Bytes(stats.VideoBytesDelta) + "/S"
+			videoSpeed := formatBits(stats.VideoBytesDelta) + "s"
 			if videoTracks > 1 {
-				videoSpeed += " avg " + humanize.Bytes(stats.VideoBytesDelta/uint64(videoTracks)) + "/S"
+				videoSpeed += " average " + formatBits(stats.VideoBytesDelta/uint64(videoTracks)) + "s"
 			}
 
-			audioSpeed := humanize.Bytes(stats.AudioBytesDelta) + "/S"
+			audioSpeed := formatBits(stats.AudioBytesDelta) + "s"
 			if audioTracks > 1 {
-				audioSpeed += " avg " + humanize.Bytes(stats.AudioBytesDelta/uint64(audioTracks)) + "/S"
+				audioSpeed += " average " + formatBits(stats.AudioBytesDelta/uint64(audioTracks)) + "s"
 			}
 
 			log.Info().
@@ -399,4 +400,13 @@ func (r *runnerImpl) logger(ctx context.Context) {
 				Msg("Stats")
 		}
 	}
+}
+
+func formatBits(bits uint64) string {
+	bytes := float64(bits) * 8
+
+	formatted := humanize.Bytes(uint64(math.Ceil(bytes)))
+	formatted = strings.Replace(formatted, "B", "bit", 1)
+
+	return formatted
 }
