@@ -9,6 +9,8 @@ webrtc-load-tool WHIP-URL [flags]
 ```
 
 ## Flags  
+- `-b, --buffersize duration`   
+Buffer size for RTP jitter buffer for lost packets counter (default 500ms)
 - `-c, --connections string`  
   Maximum number of connections to create (default: `"1"`)  
 - `-d, --duration duration`  
