@@ -44,19 +44,22 @@ type Config struct {
 	Duration time.Duration
 	// LiteMode If enabled no Video or Audio handling.
 	LiteMode bool
+	// BufferSize is the buffer size for RTP jitter buffer for lost packets counter.
+	BufferSize time.Duration
 }
 
 type callbacks struct {
-	connectionClosedCallback             func()
-	TotalConnections, CurrentConnections *atomic.Int64
-	TotalVideoTracks, CurrentVideoTracks *atomic.Int64
-	TotalAudioTracks, CurrentAudioTracks *atomic.Int64
-	TotalAudioPackets, TotalVideoPackets *atomic.Uint64
-	TotalAudioBytes, TotalVideoBytes     *atomic.Uint64
+	connectionClosedCallback                     func()
+	TotalConnections, CurrentConnections         *atomic.Int64
+	TotalVideoTracks, CurrentVideoTracks         *atomic.Int64
+	TotalAudioTracks, CurrentAudioTracks         *atomic.Int64
+	TotalAudioPackets, TotalVideoPackets         *atomic.Uint64
+	TotalAudioBytes, TotalVideoBytes             *atomic.Uint64
+	TotalLostAudioPackets, TotalLostVideoPackets *atomic.Uint64
 
 	// [*webrtcpeer.PeerConnection] -> webrtcpeer.PeerConnectionStatus
 	connectionsState *sync.Map
-	// [webrtcpeer.TrackInfo] -> [last_bytes_count uint64, last_packets_count uint64]
+	// [webrtcpeer.TrackInfo] -> [last_bytes_count uint64, last_packets_count uint64, last_lost_packets_count uint64]
 	tracks *sync.Map
 }
 
@@ -116,19 +119,22 @@ func (t *callbacks) OnTrack(track webrtcpeer.TrackInfo) {
 		t.CurrentAudioTracks.Add(1)
 		t.TotalAudioPackets.Add(track.GetPacketsCount())
 		t.TotalAudioBytes.Add(track.GetBytesCount())
+		t.TotalLostAudioPackets.Add(track.GetLostPacketsCount())
 	} else {
 		t.TotalVideoTracks.Add(1)
 		t.CurrentVideoTracks.Add(1)
 		t.TotalVideoPackets.Add(track.GetPacketsCount())
 		t.TotalVideoBytes.Add(track.GetBytesCount())
+		t.TotalLostVideoPackets.Add(track.GetLostPacketsCount())
 	}
 
-	t.tracks.Store(track, []uint64{track.GetBytesCount(), track.GetPacketsCount()})
+	t.tracks.Store(track, []uint64{track.GetBytesCount(), track.GetPacketsCount(), track.GetLostPacketsCount()})
 }
 
 type tracksPacketsDelta struct {
-	VideoPacketsDelta, AudioPacketsDelta uint64
-	VideoBytesDelta, AudioBytesDelta     uint64
+	VideoPacketsDelta, AudioPacketsDelta         uint64
+	VideoLostPacketsDelta, AudioLostPacketsDelta uint64
+	VideoBytesDelta, AudioBytesDelta             uint64
 }
 
 // GetTracksPacketsDelta returns the stats of the tracks packets.
@@ -137,6 +143,7 @@ type tracksPacketsDelta struct {
 func (t *callbacks) GetTracksPacketsDelta() tracksPacketsDelta {
 	var videoPacketsDelta, audioPacketsDelta uint64
 	var videoBytesDelta, audioBytesDelta uint64
+	var videoLostPacketsDelta, audioLostPacketsDelta uint64
 	t.tracks.Range(func(key, value interface{}) bool {
 		track, ok := key.(webrtcpeer.TrackInfo)
 		if !ok {
@@ -144,19 +151,22 @@ func (t *callbacks) GetTracksPacketsDelta() tracksPacketsDelta {
 		}
 
 		last, ok := value.([]uint64)
-		if !ok || len(last) != 2 {
+		if !ok || len(last) != 3 {
 			return true
 		}
-		lastBytesCount, lastPacketCount := last[0], last[1]
+		lastBytesCount, lastPacketCount, lastLostPacketsCount := last[0], last[1], last[2]
 		packetsCount := track.GetPacketsCount()
+		lostPacketsCount := track.GetLostPacketsCount()
 		bytesCount := track.GetBytesCount()
 
 		if track.Kind() == webrtc.RTPCodecTypeAudio {
 			audioPacketsDelta += packetsCount - lastPacketCount
 			audioBytesDelta += bytesCount - lastBytesCount
+			audioLostPacketsDelta += lostPacketsCount - lastLostPacketsCount
 		} else {
 			videoPacketsDelta += packetsCount - lastPacketCount
 			videoBytesDelta += bytesCount - lastBytesCount
+			videoLostPacketsDelta += lostPacketsCount - lastLostPacketsCount
 		}
 
 		if track.IsClosed() {
@@ -170,7 +180,7 @@ func (t *callbacks) GetTracksPacketsDelta() tracksPacketsDelta {
 			return true
 		}
 
-		t.tracks.Store(track, []uint64{bytesCount, packetsCount})
+		t.tracks.Store(track, []uint64{bytesCount, packetsCount, lostPacketsCount})
 
 		return true
 	})
@@ -179,12 +189,16 @@ func (t *callbacks) GetTracksPacketsDelta() tracksPacketsDelta {
 	t.TotalAudioPackets.Add(audioPacketsDelta)
 	t.TotalVideoBytes.Add(videoBytesDelta)
 	t.TotalAudioBytes.Add(audioBytesDelta)
+	t.TotalLostVideoPackets.Add(videoLostPacketsDelta)
+	t.TotalLostAudioPackets.Add(audioLostPacketsDelta)
 
 	return tracksPacketsDelta{
-		VideoPacketsDelta: videoPacketsDelta,
-		AudioPacketsDelta: audioPacketsDelta,
-		VideoBytesDelta:   videoBytesDelta,
-		AudioBytesDelta:   audioBytesDelta,
+		VideoPacketsDelta:     videoPacketsDelta,
+		AudioPacketsDelta:     audioPacketsDelta,
+		VideoBytesDelta:       videoBytesDelta,
+		AudioBytesDelta:       audioBytesDelta,
+		VideoLostPacketsDelta: videoLostPacketsDelta,
+		AudioLostPacketsDelta: audioLostPacketsDelta,
 	}
 }
 
@@ -254,6 +268,8 @@ func initCallbacks() *callbacks {
 		TotalVideoPackets:        &atomic.Uint64{},
 		TotalVideoBytes:          &atomic.Uint64{},
 		TotalAudioBytes:          &atomic.Uint64{},
+		TotalLostAudioPackets:    &atomic.Uint64{},
+		TotalLostVideoPackets:    &atomic.Uint64{},
 		connectionsState:         &sync.Map{},
 		tracks:                   &sync.Map{},
 	}
@@ -266,6 +282,7 @@ func New(config Config) (Runner, error) {
 		ICEServers:         config.ICEServers,
 		ICETransportPolicy: config.ICETransportPolicy,
 		LiteMode:           config.LiteMode,
+		BufferSize:         config.BufferSize,
 	}, config.WhipEndpoint, cb)
 	if err != nil {
 		return nil, err
@@ -406,6 +423,16 @@ func (r *runnerImpl) logChange() {
 		}
 	}
 
+	if stats.AudioLostPacketsDelta > 0 {
+		msg = msg.
+			Str("Audio_Lost_Packets", humanize.Comma(int64(stats.AudioLostPacketsDelta))) // nolint:gosec // G115
+	}
+
+	if stats.VideoLostPacketsDelta > 0 {
+		msg = msg.
+			Str("Video_Lost_Packets", humanize.Comma(int64(stats.VideoLostPacketsDelta))) // nolint:gosec // G115
+	}
+
 	msg.Msg("Stats")
 }
 
@@ -420,6 +447,10 @@ func (r *runnerImpl) sumLog() {
 		Str("Total_Audio_Packets", humanize.Comma(int64(r.callbacks.TotalAudioPackets.Load()))).
 		Str("Total_Video_Bytes", humanize.Bytes(r.callbacks.TotalVideoBytes.Load())).
 		Str("Total_Audio_Bytes", humanize.Bytes(r.callbacks.TotalAudioBytes.Load())).
+		//nolint:gosec // G115
+		Str("Total_Lost_Video_Packets", humanize.Comma(int64(r.callbacks.TotalLostVideoPackets.Load()))).
+		//nolint:gosec // G115
+		Str("Total_Lost_Audio_Packets", humanize.Comma(int64(r.callbacks.TotalLostAudioPackets.Load()))).
 		Str("Connections", r.callbacks.CountConnections().String()).
 		Msg("Test run finished")
 }

@@ -12,10 +12,11 @@ import (
 )
 
 type testTrack struct {
-	rtpPackets uint64
-	rtpBytes   uint64
-	closed     bool
-	kind       webrtc.RTPCodecType
+	rtpPackets     uint64
+	rtpLostPackets uint64
+	rtpBytes       uint64
+	closed         bool
+	kind           webrtc.RTPCodecType
 }
 
 func (t *testTrack) MimeType() string {
@@ -28,6 +29,10 @@ func (t *testTrack) Kind() webrtc.RTPCodecType {
 
 func (t *testTrack) GetPacketsCount() uint64 {
 	return t.rtpPackets
+}
+
+func (t *testTrack) GetLostPacketsCount() uint64 {
+	return t.rtpLostPackets
 }
 
 func (t *testTrack) GetBytesCount() uint64 {
@@ -121,9 +126,10 @@ func TestRunner_callbacks(t *testing.T) {
 
 func TestRunner_callbacksTracks(t *testing.T) {
 	videoTrack1 := &testTrack{
-		kind:       webrtc.RTPCodecTypeVideo,
-		rtpPackets: 10,
-		rtpBytes:   100,
+		kind:           webrtc.RTPCodecTypeVideo,
+		rtpPackets:     10,
+		rtpBytes:       100,
+		rtpLostPackets: 1,
 	}
 	videoTrack2 := &testTrack{
 		kind:       webrtc.RTPCodecTypeVideo,
@@ -131,9 +137,10 @@ func TestRunner_callbacksTracks(t *testing.T) {
 		rtpBytes:   200,
 	}
 	audioTrack1 := &testTrack{
-		kind:       webrtc.RTPCodecTypeAudio,
-		rtpPackets: 30,
-		rtpBytes:   300,
+		kind:           webrtc.RTPCodecTypeAudio,
+		rtpPackets:     30,
+		rtpBytes:       300,
+		rtpLostPackets: 1,
 	}
 	audioTrack2 := &testTrack{
 		kind:       webrtc.RTPCodecTypeAudio,
@@ -141,9 +148,10 @@ func TestRunner_callbacksTracks(t *testing.T) {
 		rtpBytes:   400,
 	}
 	audioTrack3 := &testTrack{
-		kind:       webrtc.RTPCodecTypeAudio,
-		rtpPackets: 50,
-		rtpBytes:   500,
+		kind:           webrtc.RTPCodecTypeAudio,
+		rtpPackets:     50,
+		rtpBytes:       500,
+		rtpLostPackets: 2,
 	}
 	cb := initCallbacks()
 
@@ -163,6 +171,8 @@ func TestRunner_callbacksTracks(t *testing.T) {
 	expectedAudioPackets := audioTrack1.rtpPackets + audioTrack2.rtpPackets + audioTrack3.rtpPackets
 	assert.Equal(t, expectedAudioPackets, cb.TotalAudioPackets.Load())
 	assert.Equal(t, expectedAudioPackets*10, cb.TotalAudioBytes.Load())
+	assert.Equal(t, uint64(3), cb.TotalLostAudioPackets.Load())
+	assert.Equal(t, uint64(1), cb.TotalLostVideoPackets.Load())
 
 	assert.Equal(t, int64(2), cb.TotalVideoTracks.Load())
 	assert.Equal(t, int64(3), cb.TotalAudioTracks.Load())
@@ -174,6 +184,8 @@ func TestRunner_callbacksTracks(t *testing.T) {
 	assert.Equal(t, uint64(0), stats.VideoBytesDelta)
 	assert.Equal(t, uint64(0), stats.VideoPacketsDelta)
 	assert.Equal(t, uint64(0), stats.AudioBytesDelta)
+	assert.Equal(t, uint64(0), stats.AudioLostPacketsDelta)
+	assert.Equal(t, uint64(0), stats.VideoLostPacketsDelta)
 
 	audioTrack1.rtpPackets += 10
 	videoTrack1.rtpPackets += 10
@@ -186,6 +198,10 @@ func TestRunner_callbacksTracks(t *testing.T) {
 	expectedAudioPackets += 10 + 13
 	expectedVideoPackets += 10 + 7
 
+	audioTrack1.rtpLostPackets += 2
+	videoTrack1.rtpLostPackets += 3
+	videoTrack2.rtpLostPackets += 2
+
 	stats = cb.GetTracksPacketsDelta()
 	assert.Equal(t, expectedAudioPackets, cb.TotalAudioPackets.Load())
 	assert.Equal(t, expectedAudioPackets*10, cb.TotalAudioBytes.Load())
@@ -195,8 +211,11 @@ func TestRunner_callbacksTracks(t *testing.T) {
 	assert.Equal(t, uint64(23*10), stats.AudioBytesDelta)
 	assert.Equal(t, uint64(17), stats.VideoPacketsDelta)
 	assert.Equal(t, uint64(17*10), stats.VideoBytesDelta)
+	assert.Equal(t, uint64(2), stats.AudioLostPacketsDelta)
+	assert.Equal(t, uint64(5), stats.VideoLostPacketsDelta)
 
 	audioTrack3.rtpPackets += 20
+	audioTrack3.rtpLostPackets += 5
 	audioTrack3.closed = true
 	// should count packets for the last time before removing the track.
 	expectedAudioPackets += 20
@@ -207,12 +226,14 @@ func TestRunner_callbacksTracks(t *testing.T) {
 	assert.Equal(t, expectedVideoPackets, cb.TotalVideoPackets.Load())
 	assert.Equal(t, uint64(20), stats.AudioPacketsDelta)
 	assert.Equal(t, uint64(0), stats.VideoPacketsDelta)
+	assert.Equal(t, uint64(5), stats.AudioLostPacketsDelta)
 	audioTrack3.rtpPackets += 10
 	stats = cb.GetTracksPacketsDelta()
 	assert.Equal(t, expectedAudioPackets, cb.TotalAudioPackets.Load())
 	assert.Equal(t, expectedVideoPackets, cb.TotalVideoPackets.Load())
 	assert.Equal(t, uint64(0), stats.AudioPacketsDelta)
 	assert.Equal(t, uint64(0), stats.VideoPacketsDelta)
+	assert.Equal(t, uint64(0), stats.AudioLostPacketsDelta)
 }
 
 func TestRunner_New(t *testing.T) {

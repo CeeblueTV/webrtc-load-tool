@@ -3,6 +3,7 @@ package webrtcpeer
 import (
 	"context"
 	"net/http"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -63,6 +64,7 @@ type Configuration struct {
 	ICETransportPolicy webrtc.ICETransportPolicy
 	LiteMode           bool
 	VideoCodec         VideoCodec
+	BufferSize         time.Duration
 }
 
 // Client represents the WebRTC Client for creating PeerConnections
@@ -75,6 +77,7 @@ type Client struct {
 	icePolicy  webrtc.ICETransportPolicy
 	liteMode   bool
 	videoCodec VideoCodec
+	bufferSize time.Duration
 }
 
 // NewClient creates a new WebRTC Client with the given configuration.
@@ -96,7 +99,8 @@ func NewClient(config Configuration, callback ChangeCallback) (*Client, error) {
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
 		},
-		callback: callback,
+		callback:   callback,
+		bufferSize: config.BufferSize,
 	}, nil
 }
 
@@ -205,10 +209,11 @@ func (a *Client) initPeerConnection() (*PeerConnection, error) {
 	}
 
 	peer := &PeerConnection{
-		pc:       pc,
-		state:    new(atomic.Int32),
-		callback: a.callback,
-		mu:       new(sync.RWMutex),
+		pc:         pc,
+		state:      new(atomic.Int32),
+		callback:   a.callback,
+		mu:         new(sync.RWMutex),
+		bufferSize: a.bufferSize,
 	}
 
 	pc.OnConnectionStateChange(peer.handleConnectionStateChange)
@@ -246,11 +251,12 @@ func (a *Client) initPeerConnection() (*PeerConnection, error) {
 // For simulation purposes, it holds the state of the connection.
 // And how many RTP packets were received.
 type PeerConnection struct {
-	pc       *webrtc.PeerConnection
-	state    *atomic.Int32
-	callback ChangeCallback
-	mu       *sync.RWMutex
-	tracks   []TrackInfo
+	pc         *webrtc.PeerConnection
+	state      *atomic.Int32
+	callback   ChangeCallback
+	mu         *sync.RWMutex
+	tracks     []TrackInfo
+	bufferSize time.Duration
 }
 
 // GetStatus returns the current status of the PeerConnection.
@@ -316,7 +322,7 @@ func (p *PeerConnection) Close() error {
 }
 
 func (p *PeerConnection) handleTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-	info := newTrackInfo(track)
+	info := newTrackInfo(track, p.bufferSize)
 	p.mu.Lock()
 	p.tracks = append(p.tracks, info)
 	p.mu.Unlock()
@@ -332,33 +338,86 @@ type TrackInfo interface {
 	Kind() webrtc.RTPCodecType
 	// GetPacketsCount returns the number of RTP packets received by the track during its lifetime.
 	GetPacketsCount() uint64
+	// GetLostPacketsCount returns the number of RTP packets lost by the track during its lifetime.
+	GetLostPacketsCount() uint64
 	// GetBytesCount returns the number of bytes received by the track during its lifetime.
 	GetBytesCount() uint64
 	// IsClosed returns whether the track is closed.
 	IsClosed() bool
 }
 
-type trackInfoImpl struct {
-	trackRemote           *webrtc.TrackRemote
-	rtpPackets, rtpBuffer *atomic.Uint64
-	closed                *atomic.Bool
-	mimeType              string
-	kind                  webrtc.RTPCodecType
+// A simple RTP packet jitter and loss tracker.
+type lostPacketsTracker struct {
+	packets    []int
+	timestamps []uint32
+	lastSeq    int
+	// BufferSize in milliseconds.
+	BufferSize uint32
+	started    bool
 }
 
-func newTrackInfo(track *webrtc.TrackRemote) TrackInfo {
+// ReportPacket adds a packet to the tracker and reports any lost packets.
+func (t *lostPacketsTracker) ReportPacket(sequence uint16, timestamp uint32) uint {
+	t.addPacket(sequence, timestamp)
+
+	cutOff := timestamp - t.BufferSize
+	var dropped uint
+	for len(t.timestamps) > 0 && t.timestamps[0] < cutOff {
+		seq := t.packets[0]
+
+		if !t.started {
+			t.started = true
+			t.lastSeq = seq
+		} else {
+			if seq > t.lastSeq+1 {
+				//nolint:gosec // G115 no overflows possible
+				dropped += uint(seq - t.lastSeq - 1)
+			}
+			t.lastSeq = seq
+		}
+
+		t.packets = t.packets[1:]
+		t.timestamps = t.timestamps[1:]
+	}
+
+	return dropped
+}
+
+// AddPacket efficiently add a packet to the tracker (sorted slice).
+func (t *lostPacketsTracker) addPacket(seq uint16, timestamp uint32) {
+	index := sort.SearchInts(t.packets, int(seq))
+	t.packets = append(t.packets, 0)
+	t.timestamps = append(t.timestamps, 0)
+	copy(t.packets[index+1:], t.packets[index:])
+	copy(t.timestamps[index+1:], t.timestamps[index:])
+	t.packets[index] = int(seq)
+	t.timestamps[index] = timestamp
+}
+
+type trackInfoImpl struct {
+	trackRemote                           *webrtc.TrackRemote
+	rtpPackets, rtpLostPackets, rtpBuffer *atomic.Uint64
+	closed                                *atomic.Bool
+	mimeType                              string
+	kind                                  webrtc.RTPCodecType
+}
+
+func newTrackInfo(track *webrtc.TrackRemote, bufferSize time.Duration) TrackInfo {
 	info := &trackInfoImpl{
-		mimeType:    track.Codec().MimeType,
-		kind:        track.Kind(),
-		trackRemote: track,
-		rtpPackets:  &atomic.Uint64{},
-		rtpBuffer:   &atomic.Uint64{},
-		closed:      &atomic.Bool{},
+		mimeType:       track.Codec().MimeType,
+		kind:           track.Kind(),
+		trackRemote:    track,
+		rtpPackets:     &atomic.Uint64{},
+		rtpBuffer:      &atomic.Uint64{},
+		rtpLostPackets: &atomic.Uint64{},
+		closed:         &atomic.Bool{},
 	}
 
 	go func() {
+		//nolint:gosec // G115 TODO: validate CLI limits
+		tracker := &lostPacketsTracker{BufferSize: uint32(bufferSize.Milliseconds())}
 		for {
-			p, _, err := track.ReadRTP()
+			packet, _, err := track.ReadRTP()
 			if err != nil {
 				info.setClosed()
 
@@ -367,7 +426,10 @@ func newTrackInfo(track *webrtc.TrackRemote) TrackInfo {
 
 			info.increasePacketCount()
 			//nolint:gosec // G115 no overflows possible
-			info.increaseBufferCount(uint64(len(p.Payload)) + uint64(p.Header.MarshalSize()))
+			info.increaseBufferCount(uint64(len(packet.Payload)) + uint64(packet.Header.MarshalSize()))
+
+			timestamp := packet.Timestamp / (track.Codec().ClockRate / 1000)
+			info.increaseLostPacketCount(uint64(tracker.ReportPacket(packet.SequenceNumber, timestamp)))
 		}
 	}()
 
@@ -390,8 +452,20 @@ func (t *trackInfoImpl) increaseBufferCount(size uint64) {
 	t.rtpBuffer.Add(size)
 }
 
+func (t *trackInfoImpl) increaseLostPacketCount(lost uint64) {
+	if lost == 0 {
+		return
+	}
+
+	t.rtpLostPackets.Add(lost)
+}
+
 func (t *trackInfoImpl) GetPacketsCount() uint64 {
 	return t.rtpPackets.Load()
+}
+
+func (t *trackInfoImpl) GetLostPacketsCount() uint64 {
+	return t.rtpLostPackets.Load()
 }
 
 func (t *trackInfoImpl) GetBytesCount() uint64 {

@@ -440,3 +440,33 @@ func TestPeerConnection_WHIPError(t *testing.T) {
 
 	<-ch
 }
+
+func TestLostPacketsTracker(t *testing.T) {
+	tracker := &lostPacketsTracker{
+		BufferSize: 1000,
+	}
+
+	assert.Equal(t, uint(0), tracker.ReportPacket(56, 1000))
+	assert.Equal(t, uint(0), tracker.ReportPacket(57, 1000))
+	assert.Equal(t, uint(0), tracker.ReportPacket(58, 1000))
+	assert.Equal(t, uint(0), tracker.ReportPacket(59, 1000))
+	assert.Equal(t, uint(0), tracker.ReportPacket(61, 1050))
+	assert.Equal(t, uint(0), tracker.ReportPacket(60, 1040))
+	assert.Equal(t, uint(0), tracker.ReportPacket(62, 1600))
+	assert.Equal(t, uint(0), tracker.ReportPacket(64, 1600))
+	assert.Equal(t, uint(0), tracker.ReportPacket(65, 1800))
+	assert.Equal(t, uint(0), tracker.ReportPacket(66, 2000))
+	assert.Equal(t, uint(0), tracker.ReportPacket(67, 2500))
+	assert.Equal(t, uint(1), tracker.ReportPacket(69, 3000))
+	assert.Equal(t, uint(0), tracker.ReportPacket(70, 4000))
+	assert.Equal(t, uint(1), tracker.ReportPacket(71, 5000))
+	assert.Equal(t, uint(0), tracker.ReportPacket(72, 6000))
+	assert.Equal(t, uint(0), tracker.ReportPacket(73, 7000))
+	assert.Equal(t, uint(0), tracker.ReportPacket(76, 7500))
+	assert.Equal(t, uint(0), tracker.ReportPacket(80, 7500))
+	assert.Equal(t, uint(5), tracker.ReportPacket(83, 9000))
+	assert.Equal(t, uint(0), tracker.ReportPacket(84, 9000))
+	assert.Equal(t, uint(0), tracker.ReportPacket(85, 9500))
+	assert.Equal(t, uint(0), tracker.ReportPacket(86, 10000))
+	assert.Equal(t, uint(2), tracker.ReportPacket(87, 10020))
+}

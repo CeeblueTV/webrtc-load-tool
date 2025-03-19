@@ -210,14 +210,32 @@ func TestRelayModeICEServers(t *testing.T) {
 	assert.ElementsMatch(t, append(stunIce, turnIce...), ice)
 }
 
+func TestParseFlags_praseBufferSize(t *testing.T) {
+	flags := initFlags()
+	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", testurl}))
+	assert.NotZero(t, flags.BufferSize, "default buffer size should not be zero")
+
+	flags = initFlags()
+	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", testurl, "-b", "3s"}))
+	assert.Equal(t, time.Second*3, flags.BufferSize)
+
+	flags = initFlags()
+	assert.Error(t, flags.Parse([]string{"webrtc-load-tool", testurl, "--buffersize", "1m3"}))
+	assert.ErrorIs(t, flags.Parse([]string{"webrtc-load-tool", testurl, "--buffersize", "0"}), errInvalidDuration)
+
+	flags = initFlags()
+	assert.ErrorIs(t, flags.Parse([]string{"webrtc-load-tool", testurl, "--buffersize", "10ms"}), errInvalidDuration)
+}
+
 func TestFlagsRunnerConfig(t *testing.T) {
 	flags := initFlags()
-	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", testurl, "-c", "3", "-d", "3s", "-l"}))
+	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", testurl, "-c", "3", "-d", "3s", "-l", "-b", "5s"}))
 	config := flags.RunnerConfig()
 	assert.Equal(t, testurl, config.WhipEndpoint)
 	assert.Equal(t, uint(3), config.Connections)
 	assert.Equal(t, time.Second*3, config.Duration)
 	assert.Equal(t, time.Duration(0), config.Runup)
+	assert.Equal(t, time.Second*5, config.BufferSize)
 	assert.True(t, config.LiteMode)
 	assert.NotEmpty(t, config.ICEServers)
 }
