@@ -44,8 +44,8 @@ type Config struct {
 	Duration time.Duration
 	// LiteMode If enabled no Video or Audio handling.
 	LiteMode bool
-	// BufferSize is the buffer size for RTP jitter buffer for lost packets counter.
-	BufferSize time.Duration
+	// BufferDuration is the buffer duration for RTP jitter buffer for lost packets counter.
+	BufferDuration time.Duration
 }
 
 type callbacks struct {
@@ -282,7 +282,7 @@ func New(config Config) (Runner, error) {
 		ICEServers:         config.ICEServers,
 		ICETransportPolicy: config.ICETransportPolicy,
 		LiteMode:           config.LiteMode,
-		BufferSize:         config.BufferSize,
+		BufferDuration:     config.BufferDuration,
 	}, config.WhipEndpoint, cb)
 	if err != nil {
 		return nil, err

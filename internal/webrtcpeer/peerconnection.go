@@ -64,20 +64,20 @@ type Configuration struct {
 	ICETransportPolicy webrtc.ICETransportPolicy
 	LiteMode           bool
 	VideoCodec         VideoCodec
-	BufferSize         time.Duration
+	BufferDuration     time.Duration
 }
 
 // Client represents the WebRTC Client for creating PeerConnections
 // Based on the Pion WebRTC API and WHIP signaling.
 type Client struct {
-	api        *webrtc.API
-	httpClient *http.Client
-	callback   ChangeCallback
-	iceServers []webrtc.ICEServer
-	icePolicy  webrtc.ICETransportPolicy
-	liteMode   bool
-	videoCodec VideoCodec
-	bufferSize time.Duration
+	api            *webrtc.API
+	httpClient     *http.Client
+	callback       ChangeCallback
+	iceServers     []webrtc.ICEServer
+	icePolicy      webrtc.ICETransportPolicy
+	liteMode       bool
+	videoCodec     VideoCodec
+	bufferDuration time.Duration
 }
 
 // NewClient creates a new WebRTC Client with the given configuration.
@@ -99,8 +99,8 @@ func NewClient(config Configuration, callback ChangeCallback) (*Client, error) {
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
 		},
-		callback:   callback,
-		bufferSize: config.BufferSize,
+		callback:       callback,
+		bufferDuration: config.BufferDuration,
 	}, nil
 }
 
@@ -209,11 +209,11 @@ func (a *Client) initPeerConnection() (*PeerConnection, error) {
 	}
 
 	peer := &PeerConnection{
-		pc:         pc,
-		state:      new(atomic.Int32),
-		callback:   a.callback,
-		mu:         new(sync.RWMutex),
-		bufferSize: a.bufferSize,
+		pc:             pc,
+		state:          new(atomic.Int32),
+		callback:       a.callback,
+		mu:             new(sync.RWMutex),
+		bufferDuration: a.bufferDuration,
 	}
 
 	pc.OnConnectionStateChange(peer.handleConnectionStateChange)
@@ -251,12 +251,12 @@ func (a *Client) initPeerConnection() (*PeerConnection, error) {
 // For simulation purposes, it holds the state of the connection.
 // And how many RTP packets were received.
 type PeerConnection struct {
-	pc         *webrtc.PeerConnection
-	state      *atomic.Int32
-	callback   ChangeCallback
-	mu         *sync.RWMutex
-	tracks     []TrackInfo
-	bufferSize time.Duration
+	pc             *webrtc.PeerConnection
+	state          *atomic.Int32
+	callback       ChangeCallback
+	mu             *sync.RWMutex
+	tracks         []TrackInfo
+	bufferDuration time.Duration
 }
 
 // GetStatus returns the current status of the PeerConnection.
@@ -322,7 +322,7 @@ func (p *PeerConnection) Close() error {
 }
 
 func (p *PeerConnection) handleTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-	info := newTrackInfo(track, p.bufferSize)
+	info := newTrackInfo(track, p.bufferDuration)
 	p.mu.Lock()
 	p.tracks = append(p.tracks, info)
 	p.mu.Unlock()
@@ -351,16 +351,16 @@ type lostPacketsTracker struct {
 	packets    []int
 	timestamps []uint32
 	lastSeq    int
-	// BufferSize in milliseconds.
-	BufferSize uint32
-	started    bool
+	// BufferDuration in milliseconds.
+	BufferDuration uint32
+	started        bool
 }
 
 // ReportPacket adds a packet to the tracker and reports any lost packets.
 func (t *lostPacketsTracker) ReportPacket(sequence uint16, timestamp uint32) uint {
 	t.addPacket(sequence, timestamp)
 
-	cutOff := timestamp - t.BufferSize
+	cutOff := timestamp - t.BufferDuration
 	var dropped uint
 	for len(t.timestamps) > 0 && t.timestamps[0] < cutOff {
 		seq := t.packets[0]
@@ -402,7 +402,7 @@ type trackInfoImpl struct {
 	kind                                  webrtc.RTPCodecType
 }
 
-func newTrackInfo(track *webrtc.TrackRemote, bufferSize time.Duration) TrackInfo {
+func newTrackInfo(track *webrtc.TrackRemote, bufferDuration time.Duration) TrackInfo {
 	info := &trackInfoImpl{
 		mimeType:       track.Codec().MimeType,
 		kind:           track.Kind(),
@@ -415,7 +415,7 @@ func newTrackInfo(track *webrtc.TrackRemote, bufferSize time.Duration) TrackInfo
 
 	go func() {
 		//nolint:gosec // G115 TODO: validate CLI limits
-		tracker := &lostPacketsTracker{BufferSize: uint32(bufferSize.Milliseconds())}
+		tracker := &lostPacketsTracker{BufferDuration: uint32(bufferDuration.Milliseconds())}
 		for {
 			packet, _, err := track.ReadRTP()
 			if err != nil {

@@ -443,7 +443,7 @@ func TestPeerConnection_WHIPError(t *testing.T) {
 
 func TestLostPacketsTracker(t *testing.T) {
 	tracker := &lostPacketsTracker{
-		BufferSize: 1000,
+		BufferDuration: 1000,
 	}
 
 	assert.Equal(t, uint(0), tracker.ReportPacket(56, 1000))

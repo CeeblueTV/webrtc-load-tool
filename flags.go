@@ -21,7 +21,7 @@ type flags struct {
 	durationVal    *time.Duration
 	relayModeVal   *string
 	liteModeVal    *bool
-	bufferSize     *time.Duration
+	bufferDuration *time.Duration
 	// whipURL is the URL of the WHIP server.
 	WhipEndpoint string
 	// Connections is the maximum number of connections to create.
@@ -38,8 +38,8 @@ type flags struct {
 	RelayMode relayMode
 	// LiteMode If enabled no Video or Audio handling.
 	LiteMode bool
-	// BufferSize is the buffer size for RTP jitter buffer for lost packets counter.
-	BufferSize time.Duration
+	// BufferDuration is the buffer duration for RTP jitter buffer for lost packets counter.
+	BufferDuration time.Duration
 }
 
 type relayMode int
@@ -76,8 +76,8 @@ func initFlags() *flags {
 		durationVal:    flagset.DurationP("duration", "d", time.Minute, "time to run the test"),
 		relayModeVal:   flagset.StringP("relaymode", "m", "auto", "relay mode to use (auto, no, only)"),
 		liteModeVal:    flagset.BoolP("lite", "l", false, "lite mode, no Video or Audio handling"),
-		bufferSize: flagset.DurationP(
-			"buffersize", "b", time.Millisecond*500, "Buffer size for RTP jitter buffer for lost packets counter",
+		bufferDuration: flagset.DurationP(
+			"bufferduration", "b", time.Millisecond*500, "Buffer duration for RTP jitter buffer for lost packets counter",
 		),
 	}
 
@@ -132,7 +132,7 @@ func (f *flags) Parse(args []string) error { //nolint:cyclop
 		f.LiteMode = *f.liteModeVal
 	}
 
-	if err := f.parseBufferSize(); err != nil {
+	if err := f.parseBufferDuration(); err != nil {
 		return err
 	}
 
@@ -244,16 +244,16 @@ func (f *flags) parseRelayMode() error {
 	return nil
 }
 
-func (f *flags) parseBufferSize() error {
-	if f.bufferSize == nil {
-		return fmt.Errorf("%w: missing buffer size value", errInvalidDuration)
+func (f *flags) parseBufferDuration() error {
+	if f.bufferDuration == nil {
+		return fmt.Errorf("%w: missing buffer duration value", errInvalidDuration)
 	}
 
-	if *f.bufferSize <= time.Millisecond*10 {
-		return fmt.Errorf("%w: buffer size must be greater than 10ms", errInvalidDuration)
+	if *f.bufferDuration <= time.Millisecond*10 {
+		return fmt.Errorf("%w: buffer duration must be greater than 10ms", errInvalidDuration)
 	}
 
-	f.BufferSize = *f.bufferSize
+	f.BufferDuration = *f.bufferDuration
 
 	return nil
 }
@@ -317,6 +317,6 @@ func (f *flags) RunnerConfig() runner.Config {
 		Connections:        f.Connections,
 		Runup:              f.Runup,
 		Duration:           f.Duration,
-		BufferSize:         f.BufferSize,
+		BufferDuration:     f.BufferDuration,
 	}
 }
