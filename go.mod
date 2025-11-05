@@ -6,6 +6,7 @@ toolchain go1.24.4
 
 require (
 	github.com/dustin/go-humanize v1.0.1
+	github.com/gorilla/websocket v1.5.1
 	github.com/pion/rtp v1.8.25
 	github.com/pion/webrtc/v4 v4.1.6
 	github.com/rs/zerolog v1.34.0

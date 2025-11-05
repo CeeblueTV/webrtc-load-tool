@@ -4,10 +4,12 @@ import (
 	"context"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -65,19 +67,23 @@ type Configuration struct {
 	LiteMode           bool
 	VideoCodec         VideoCodec
 	BufferDuration     time.Duration
+	TargetResolution   int
+	TargetCodec        string // Preferred codec (e.g., "H264", "VP8"), empty means default to H264 if resolution is set
 }
 
 // Client represents the WebRTC Client for creating PeerConnections
 // Based on the Pion WebRTC API and Ceeblue's whep/whip-like http implementation.
 type Client struct {
-	api            *webrtc.API
-	httpClient     *http.Client
-	callback       ChangeCallback
-	iceServers     []webrtc.ICEServer
-	icePolicy      webrtc.ICETransportPolicy
-	liteMode       bool
-	videoCodec     VideoCodec
-	bufferDuration time.Duration
+	api              *webrtc.API
+	httpClient       *http.Client
+	callback         ChangeCallback
+	iceServers       []webrtc.ICEServer
+	icePolicy        webrtc.ICETransportPolicy
+	liteMode         bool
+	videoCodec       VideoCodec
+	bufferDuration   time.Duration
+	targetResolution int
+	targetCodec      string
 }
 
 // NewClient creates a new WebRTC Client with the given configuration.
@@ -88,14 +94,24 @@ func NewClient(config Configuration, callback ChangeCallback) (*Client, error) {
 		return nil, err
 	}
 
-	api := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine))
+	registry := &interceptor.Registry{}
+	if err := webrtc.RegisterDefaultInterceptors(mediaEngine, registry); err != nil {
+		return nil, err
+	}
+
+	api := webrtc.NewAPI(
+		webrtc.WithMediaEngine(mediaEngine),
+		webrtc.WithInterceptorRegistry(registry),
+	)
 
 	return &Client{
-		api:        api,
-		iceServers: config.ICEServers,
-		icePolicy:  config.ICETransportPolicy,
-		liteMode:   config.LiteMode,
-		videoCodec: config.VideoCodec,
+		api:              api,
+		iceServers:       config.ICEServers,
+		icePolicy:        config.ICETransportPolicy,
+		liteMode:         config.LiteMode,
+		videoCodec:       config.VideoCodec,
+		targetResolution: config.TargetResolution,
+		targetCodec:      config.TargetCodec,
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -112,22 +128,34 @@ func buildMediaEngine(codec VideoCodec) (mediaEngine *webrtc.MediaEngine, err er
 	case VideoCodecVP8:
 		err = mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
 			RTPCodecCapability: webrtc.RTPCodecCapability{
-				MimeType:     webrtc.MimeTypeVP8,
-				ClockRate:    90000,
-				Channels:     0,
-				SDPFmtpLine:  "",
-				RTCPFeedback: nil,
+				MimeType:    webrtc.MimeTypeVP8,
+				ClockRate:   90000,
+				Channels:    0,
+				SDPFmtpLine: "",
+				RTCPFeedback: []webrtc.RTCPFeedback{
+					{Type: "goog-remb"},
+					{Type: "transport-cc"},
+					{Type: "ccm", Parameter: "fir"},
+					{Type: "nack"},
+					{Type: "nack", Parameter: "pli"},
+				},
 			},
 			PayloadType: 96,
 		}, webrtc.RTPCodecTypeVideo)
 	case VideoCodecH264:
 		err = mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
 			RTPCodecCapability: webrtc.RTPCodecCapability{
-				MimeType:     webrtc.MimeTypeH264,
-				ClockRate:    90000,
-				Channels:     0,
-				SDPFmtpLine:  "",
-				RTCPFeedback: nil,
+				MimeType:    webrtc.MimeTypeH264,
+				ClockRate:   90000,
+				Channels:    0,
+				SDPFmtpLine: "",
+				RTCPFeedback: []webrtc.RTCPFeedback{
+					{Type: "goog-remb"},
+					{Type: "transport-cc"},
+					{Type: "ccm", Parameter: "fir"},
+					{Type: "nack"},
+					{Type: "nack", Parameter: "pli"},
+				},
 			},
 			PayloadType: 102,
 		}, webrtc.RTPCodecTypeVideo)
@@ -147,7 +175,7 @@ func buildMediaEngine(codec VideoCodec) (mediaEngine *webrtc.MediaEngine, err er
 				ClockRate:    48000,
 				Channels:     2,
 				SDPFmtpLine:  "",
-				RTCPFeedback: nil,
+				RTCPFeedback: []webrtc.RTCPFeedback{{Type: "transport-cc"}},
 			},
 			PayloadType: 111,
 		}, webrtc.RTPCodecTypeAudio)
@@ -160,13 +188,23 @@ func buildMediaEngine(codec VideoCodec) (mediaEngine *webrtc.MediaEngine, err er
 }
 
 // NewPeerConnection creates a new PeerConnection and handles Ceeblue's whep/whip-like http implementation.
-func (a *Client) NewPeerConnection(ctx context.Context, httpEndpoint string) (*PeerConnection, error) {
+// If the endpoint uses ws:// or wss://, it will use WebSocket signaling instead.
+func (a *Client) NewPeerConnection(ctx context.Context, endpoint string) (*PeerConnection, error) {
 	peer, err := a.initPeerConnection()
 	if err != nil {
 		return nil, err
 	}
 
-	answer, err := httpSignal(ctx, a.httpClient, httpEndpoint, peer.GetOffer())
+	var (
+		answer  string
+		closeFn func()
+	)
+
+	if strings.HasPrefix(endpoint, "ws://") || strings.HasPrefix(endpoint, "wss://") {
+		answer, closeFn, err = wsSignal(ctx, endpoint, peer.GetOffer(), a.targetResolution, a.targetCodec)
+	} else {
+		answer, err = httpSignal(ctx, a.httpClient, endpoint, peer.GetOffer())
+	}
 	if err != nil {
 		closeErr := peer.pc.Close()
 		if closeErr != nil {
@@ -178,6 +216,10 @@ func (a *Client) NewPeerConnection(ctx context.Context, httpEndpoint string) (*P
 
 	if err := peer.SetAnswer(answer); err != nil {
 		return nil, err
+	}
+
+	if closeFn != nil {
+		peer.setSignalingCloser(closeFn)
 	}
 
 	return peer, nil
@@ -257,6 +299,7 @@ type PeerConnection struct {
 	mu             *sync.RWMutex
 	tracks         []TrackInfo
 	bufferDuration time.Duration
+	signalingClose func()
 }
 
 // GetStatus returns the current status of the PeerConnection.
@@ -318,6 +361,10 @@ func (p *PeerConnection) closeAllTracks() {
 
 // Close closes the underlying PeerConnection.
 func (p *PeerConnection) Close() error {
+	if p.signalingClose != nil {
+		p.signalingClose()
+	}
+
 	return p.pc.Close()
 }
 
@@ -490,4 +537,10 @@ func (t *trackInfoImpl) setClosed() {
 // IsClosed returns whether the track is closed.
 func (t *trackInfoImpl) IsClosed() bool {
 	return t.closed.Load()
+}
+
+func (p *PeerConnection) setSignalingCloser(closeFn func()) {
+	p.mu.Lock()
+	p.signalingClose = closeFn
+	p.mu.Unlock()
 }

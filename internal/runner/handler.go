@@ -28,23 +28,23 @@ type handlerCallbacks interface {
 }
 
 type webrtcHandler struct {
-	callbacks    handlerCallbacks
-	client       *webrtcpeer.Client
-	httpEndpoint string
-	peers        []*webrtcpeer.PeerConnection
-	mu           sync.RWMutex
+	callbacks handlerCallbacks
+	client    *webrtcpeer.Client
+	endpoint  string
+	peers     []*webrtcpeer.PeerConnection
+	mu        sync.RWMutex
 }
 
 func newWebRTCHandler(
 	config webrtcpeer.Configuration,
-	httpEndpoint string,
+	endpoint string,
 	callbacks handlerCallbacks,
 ) (handler, error) {
 	handler := &webrtcHandler{
-		callbacks:    callbacks,
-		peers:        make([]*webrtcpeer.PeerConnection, 0),
-		mu:           sync.RWMutex{},
-		httpEndpoint: httpEndpoint,
+		callbacks: callbacks,
+		peers:     make([]*webrtcpeer.PeerConnection, 0),
+		mu:        sync.RWMutex{},
+		endpoint:  endpoint,
 	}
 	client, err := webrtcpeer.NewClient(config, handler.changeCallback)
 	if err != nil {
@@ -74,6 +74,9 @@ func (h *webrtcHandler) changeCallback(
 				h.callbacks.OnConnected(peer)
 			case webrtcpeer.PeerConnectionStatusDisconnected:
 				h.callbacks.OnDisconnected(peer)
+				// Proactively close to trigger Closed state and cleanup sockets
+				_ = peer.Close()
+				h.callbacks.OnClosed(peer)
 			case webrtcpeer.PeerConnectionStatusClosed:
 				h.callbacks.OnClosed(peer)
 			}
@@ -87,7 +90,7 @@ func (h *webrtcHandler) changeCallback(
 }
 
 func (h *webrtcHandler) AddConnection(ctx context.Context) error {
-	peer, err := h.client.NewPeerConnection(ctx, h.httpEndpoint)
+	peer, err := h.client.NewPeerConnection(ctx, h.endpoint)
 	if err != nil {
 		return err
 	}
