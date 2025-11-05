@@ -46,6 +46,13 @@ type Config struct {
 	LiteMode bool
 	// BufferDuration is the buffer duration for RTP jitter buffer for lost packets counter.
 	BufferDuration time.Duration
+	// TargetResolution is the target resolution height (e.g., 2160 for 4K, 1080 for HD).
+	// The client will automatically switch to the closest available resolution <= target.
+	// Set to 0 to disable automatic resolution switching.
+	TargetResolution int
+	// TargetCodec is the preferred codec (e.g., "H264", "VP8").
+	// If resolution is set but codec is not, defaults to H264.
+	TargetCodec string
 }
 
 type callbacks struct {
@@ -114,6 +121,10 @@ func (t *callbacks) GetConnectionsState(peer *webrtcpeer.PeerConnection) (
 }
 
 func (t *callbacks) OnTrack(track webrtcpeer.TrackInfo) {
+	log.Info().
+		Str("Kind", track.Kind().String()).
+		Str("Codec", track.MimeType()).
+		Msg("New track")
 	if track.Kind() == webrtc.RTPCodecTypeAudio {
 		t.TotalAudioTracks.Add(1)
 		t.CurrentAudioTracks.Add(1)
@@ -283,6 +294,8 @@ func New(config Config) (Runner, error) {
 		ICETransportPolicy: config.ICETransportPolicy,
 		LiteMode:           config.LiteMode,
 		BufferDuration:     config.BufferDuration,
+		TargetResolution:   config.TargetResolution,
+		TargetCodec:        config.TargetCodec,
 	}, config.WhipEndpoint, cb)
 	if err != nil {
 		return nil, err
@@ -380,6 +393,12 @@ func (r *runnerImpl) logger(ctx context.Context) {
 
 			return
 		case <-tick.C:
+			// Stop logging once all connections are closed to avoid trailing spam
+			if r.callbacks.CurrentConnections.Load() == 0 {
+				r.sumLog()
+
+				return
+			}
 			r.logChange()
 		}
 	}

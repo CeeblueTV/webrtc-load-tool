@@ -15,13 +15,15 @@ import (
 
 // represents webrtc-load-tool command line flags.
 type flags struct {
-	flagset        *pflag.FlagSet
-	connectionsVal *string
-	runupVal       *time.Duration
-	durationVal    *time.Duration
-	relayModeVal   *string
-	liteModeVal    *bool
-	bufferDuration *time.Duration
+	flagset             *pflag.FlagSet
+	connectionsVal      *string
+	runupVal            *time.Duration
+	durationVal         *time.Duration
+	relayModeVal        *string
+	liteModeVal         *bool
+	bufferDuration      *time.Duration
+	targetResolutionVal *string
+	targetCodecVal      *string
 	// whipURL is the URL of the WHIP server.
 	WhipEndpoint string
 	// Connections is the maximum number of connections to create.
@@ -40,6 +42,14 @@ type flags struct {
 	LiteMode bool
 	// BufferDuration is the buffer duration for RTP jitter buffer for lost packets counter.
 	BufferDuration time.Duration
+	// TargetResolution is the target resolution height (e.g., 2160 for 4K, 1080 for HD, 720 for HD).
+	// The client will automatically switch to the closest available resolution <= target.
+	// Set to 0 to disable automatic resolution switching.
+	TargetResolution int
+	// TargetCodec is the preferred codec (e.g., "H264", "VP8").
+	// If resolution is set but codec is not, defaults to H264.
+	// Empty means any codec when resolution is also not set.
+	TargetCodec string
 }
 
 type relayMode int
@@ -69,7 +79,7 @@ func (r relayMode) String() string {
 
 func initFlags() *flags {
 	flagset := pflag.NewFlagSet("webrtc-load-tool", pflag.ContinueOnError)
-	f := &flags{
+	flagSet := &flags{
 		flagset:        flagset,
 		connectionsVal: flagset.StringP("connections", "c", "1", "maximum number of connections to create"),
 		runupVal:       flagset.DurationP("runup", "r", 0, "time frame to create maximum number of connections"),
@@ -77,101 +87,120 @@ func initFlags() *flags {
 		relayModeVal:   flagset.StringP("relaymode", "m", "auto", "relay mode to use (auto, no, only)"),
 		liteModeVal:    flagset.BoolP("lite", "l", false, "lite mode, no Video or Audio handling"),
 		bufferDuration: flagset.DurationP(
-			"bufferduration", "b", time.Millisecond*500, "Buffer duration for RTP jitter buffer for lost packets counter",
+			"bufferduration", "b", time.Millisecond*500,
+			"Buffer duration for RTP jitter buffer for lost packets counter",
+		),
+		targetResolutionVal: flagset.StringP(
+			"targetresolution", "t", "",
+			"target resolution (e.g., 4k, 1080p, 720p, 1080, 720). "+
+				"Automatically switches to closest available resolution <= target",
+		),
+		targetCodecVal: flagset.StringP(
+			"codec", "", "",
+			"preferred codec (H264 or VP8). Defaults to H264 if resolution is set",
 		),
 	}
 
-	return f
+	return flagSet
 }
 
 // PrintDefaults Prints the flag set usage.
-func (f *flags) PrintDefaults() {
-	f.flagset.PrintDefaults()
+func (flagSet *flags) PrintDefaults() {
+	flagSet.flagset.PrintDefaults()
 }
 
 // ParseFlags parses webrtc-load-tool command line flags.
-func (f *flags) Parse(args []string) error { //nolint:cyclop
+func (flagSet *flags) Parse(args []string) error { //nolint:cyclop
 	if len(args) == 0 {
 		return errShortArgs
 	}
 
-	if f.flagset == nil {
+	if flagSet.flagset == nil {
 		return fmt.Errorf("%w: flags was not initialized", errParseFlags)
 	}
 
-	err := f.flagset.Parse(args)
+	err := flagSet.flagset.Parse(args)
 	if err != nil {
 		return fmt.Errorf("%w: %s", errParseFlags, err) //nolint:errorlint // we wrap the error
 	}
 
-	if err := f.parseWhipURL(); err != nil {
+	if err := flagSet.parseWhipURL(); err != nil {
 		return err
 	}
 
-	if err := f.praseConnections(); err != nil {
+	if err := flagSet.praseConnections(); err != nil {
 		return err
 	}
 
-	if err := f.parseRelayMode(); err != nil {
+	if err := flagSet.parseRelayMode(); err != nil {
 		return err
 	}
 
-	if f.runupVal != nil {
-		f.Runup = *f.runupVal
+	if flagSet.runupVal != nil {
+		flagSet.Runup = *flagSet.runupVal
 	}
 
-	f.Duration = time.Minute
-	if f.durationVal != nil {
-		f.Duration = *f.durationVal
-		if f.Duration <= 0 {
+	flagSet.Duration = time.Minute
+	if flagSet.durationVal != nil {
+		flagSet.Duration = *flagSet.durationVal
+		if flagSet.Duration <= 0 {
 			return fmt.Errorf("%w: duration must be greater than 0", errInvalidDuration)
 		}
 	}
 
-	if f.liteModeVal != nil {
-		f.LiteMode = *f.liteModeVal
+	if flagSet.liteModeVal != nil {
+		flagSet.LiteMode = *flagSet.liteModeVal
 	}
 
-	if err := f.parseBufferDuration(); err != nil {
+	if err := flagSet.parseBufferDuration(); err != nil {
+		return err
+	}
+
+	if err := flagSet.parseTargetResolution(); err != nil {
+		return err
+	}
+
+	if err := flagSet.parseTargetCodec(); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (f *flags) parseWhipURL() error {
-	whip := f.flagset.Arg(1)
+func (flagSet *flags) parseWhipURL() error {
+	whip := flagSet.flagset.Arg(1)
 	if whip == "" {
-		return errWhipURLRequired
+		return errEndpointRequired
 	}
 
-	u, err := url.Parse(whip)
+	parsedURL, err := url.Parse(whip)
 	if err != nil {
-		return fmt.Errorf("%w: %s", errInvalidWhipURL, err) //nolint:errorlint // we wrap the error
+		return fmt.Errorf("%w: %s", errInvalidEndpointURL, err) //nolint:errorlint // we wrap the error
 	}
 
-	if u.Scheme != "https" && u.Scheme != "http" {
-		return fmt.Errorf("%w: scheme must be http(s)", errInvalidWhipURL)
+	if parsedURL.Scheme != "https" && parsedURL.Scheme != "http" &&
+		parsedURL.Scheme != "ws" && parsedURL.Scheme != "wss" {
+		return fmt.Errorf("%w: scheme must be http(s) or ws(s)", errInvalidEndpointURL)
 	}
 
-	f.WhipEndpoint = whip
+	flagSet.WhipEndpoint = whip
 
 	return nil
 }
 
-func (f *flags) praseConnections() error {
-	if f.connectionsVal == nil {
+func (flagSet *flags) praseConnections() error {
+	if flagSet.connectionsVal == nil {
 		return fmt.Errorf("%w: missing connections value", errInvalidConnections)
 	}
 
-	connections := *f.connectionsVal
+	connections := *flagSet.connectionsVal
 	if connections == "" {
-		f.Connections = 1
+		flagSet.Connections = 1
 
 		return fmt.Errorf("%w: missing connections value", errInvalidConnections)
 	}
 
-	cons, err := f.parseHumanReadableNumber(connections)
+	cons, err := flagSet.parseHumanReadableNumber(connections)
 	if err != nil {
 		return err
 	}
@@ -180,13 +209,13 @@ func (f *flags) praseConnections() error {
 		return fmt.Errorf("%w: connections must be greater than 0", errInvalidConnections)
 	}
 
-	f.Connections = cons
+	flagSet.Connections = cons
 
 	return nil
 }
 
 // parse SI unit (k) and allow for numbers seporators, and simple decimals.
-func (f *flags) parseHumanReadableNumber(num string) (uint, error) {
+func (flagSet *flags) parseHumanReadableNumber(num string) (uint, error) {
 	cons := uint(0)
 	dec := uint(0)
 	hasDot := false
@@ -224,19 +253,19 @@ func (f *flags) parseHumanReadableNumber(num string) (uint, error) {
 	return cons, nil
 }
 
-func (f *flags) parseRelayMode() error {
-	if f.relayModeVal == nil {
+func (flagSet *flags) parseRelayMode() error {
+	if flagSet.relayModeVal == nil {
 		return fmt.Errorf("%w: missing relay mode value", errInvalidRelayMode)
 	}
 
-	relay := strings.ToLower(*f.relayModeVal)
+	relay := strings.ToLower(*flagSet.relayModeVal)
 	switch relay {
 	case "auto":
-		f.RelayMode = RelayModeAuto
+		flagSet.RelayMode = RelayModeAuto
 	case "no":
-		f.RelayMode = RelayModeNo
+		flagSet.RelayMode = RelayModeNo
 	case "only":
-		f.RelayMode = RelayModeOnly
+		flagSet.RelayMode = RelayModeOnly
 	default:
 		return fmt.Errorf("%w: invalid relay mode", errInvalidRelayMode)
 	}
@@ -244,52 +273,128 @@ func (f *flags) parseRelayMode() error {
 	return nil
 }
 
-func (f *flags) parseBufferDuration() error {
-	if f.bufferDuration == nil {
+func (flagSet *flags) parseBufferDuration() error {
+	if flagSet.bufferDuration == nil {
 		return fmt.Errorf("%w: missing buffer duration value", errInvalidDuration)
 	}
 
-	if *f.bufferDuration <= time.Millisecond*10 {
+	if *flagSet.bufferDuration <= time.Millisecond*10 {
 		return fmt.Errorf("%w: buffer duration must be greater than 10ms", errInvalidDuration)
 	}
 
-	f.BufferDuration = *f.bufferDuration
+	flagSet.BufferDuration = *flagSet.bufferDuration
 
 	return nil
 }
 
-func (f *flags) ICEServers() []webrtc.ICEServer {
+func (flagSet *flags) parseTargetResolution() error { //nolint:cyclop
+	if flagSet.targetResolutionVal == nil || *flagSet.targetResolutionVal == "" {
+		flagSet.TargetResolution = 0
+
+		return nil
+	}
+
+	resStr := strings.ToLower(strings.TrimSpace(*flagSet.targetResolutionVal))
+
+	resolution := parseResolutionName(resStr)
+	if resolution > 0 {
+		flagSet.TargetResolution = resolution
+
+		return nil
+	}
+
+	resStr = strings.TrimSuffix(resStr, "p")
+
+	var height int
+	if _, err := fmt.Sscanf(resStr, "%d", &height); err != nil {
+		return fmt.Errorf(
+			"%w: invalid target resolution format, expected format like 4k, 1080p, 720p, 1080, or 720",
+			errInvalidResolution,
+		)
+	}
+
+	if height <= 0 {
+		return fmt.Errorf("%w: target resolution must be greater than 0", errInvalidResolution)
+	}
+
+	flagSet.TargetResolution = height
+
+	return nil
+}
+
+func parseResolutionName(resStr string) int {
+	switch resStr {
+	case "4k", "2160p", "2160":
+		return 2160
+	case "2k", "1440p", "1440":
+		return 1440
+	case "1080p", "1080", "hd", "fhd":
+		return 1080
+	case "720p", "720", "hdready":
+		return 720
+	case "480p", "480":
+		return 480
+	case "360p", "360":
+		return 360
+	case "240p", "240":
+		return 240
+	default:
+		return 0
+	}
+}
+
+func (flagSet *flags) parseTargetCodec() error {
+	if flagSet.targetCodecVal == nil || *flagSet.targetCodecVal == "" {
+		flagSet.TargetCodec = ""
+
+		return nil
+	}
+
+	codec := strings.ToUpper(strings.TrimSpace(*flagSet.targetCodecVal))
+	switch codec {
+	case "H264", "H.264":
+		flagSet.TargetCodec = "H264"
+	case "VP8":
+		flagSet.TargetCodec = "VP8"
+	default:
+		return fmt.Errorf("%w: invalid codec, expected H264 or VP8", errInvalidResolution)
+	}
+
+	return nil
+}
+
+func (flagSet *flags) ICEServers() []webrtc.ICEServer {
 	stun := []webrtc.ICEServer{
 		{
 			URLs: []string{"stun:stun.l.google.com:19302"},
 		},
 	}
 
-	if f.RelayMode == RelayModeNo {
+	if flagSet.RelayMode == RelayModeNo {
 		return stun
 	}
 
-	turn, err := f.turnICEServers()
+	turn, err := flagSet.turnICEServers()
 	if err != nil {
 		log.Error().Err(err).Msg("failed to get TURN servers, using stun only")
 
 		return stun
 	}
 
-	if f.RelayMode == RelayModeAuto {
+	if flagSet.RelayMode == RelayModeAuto {
 		return append(stun, turn...)
 	}
 
 	return turn
 }
 
-func (f *flags) turnICEServers() ([]webrtc.ICEServer, error) {
-	u, err := url.Parse(f.WhipEndpoint)
+func (flagSet *flags) turnICEServers() ([]webrtc.ICEServer, error) {
+	parsedURL, err := url.Parse(flagSet.WhipEndpoint)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", errInvalidWhipURL, err) //nolint:errorlint // we wrap the error
+		return nil, fmt.Errorf("%w: %s", errInvalidEndpointURL, err) //nolint:errorlint // we wrap the error
 	}
 
-	domain := u.Hostname()
+	domain := parsedURL.Hostname()
 
 	return []webrtc.ICEServer{
 		{
@@ -303,20 +408,22 @@ func (f *flags) turnICEServers() ([]webrtc.ICEServer, error) {
 	}, nil
 }
 
-func (f *flags) RunnerConfig() runner.Config {
+func (flagSet *flags) RunnerConfig() runner.Config {
 	transportPolicy := webrtc.ICETransportPolicyAll
-	if f.RelayMode == RelayModeOnly {
+	if flagSet.RelayMode == RelayModeOnly {
 		transportPolicy = webrtc.ICETransportPolicyRelay
 	}
 
 	return runner.Config{
-		ICEServers:         f.ICEServers(),
+		ICEServers:         flagSet.ICEServers(),
 		ICETransportPolicy: transportPolicy,
-		LiteMode:           f.LiteMode,
-		WhipEndpoint:       f.WhipEndpoint,
-		Connections:        f.Connections,
-		Runup:              f.Runup,
-		Duration:           f.Duration,
-		BufferDuration:     f.BufferDuration,
+		LiteMode:           flagSet.LiteMode,
+		WhipEndpoint:       flagSet.WhipEndpoint,
+		Connections:        flagSet.Connections,
+		Runup:              flagSet.Runup,
+		Duration:           flagSet.Duration,
+		BufferDuration:     flagSet.BufferDuration,
+		TargetResolution:   flagSet.TargetResolution,
+		TargetCodec:        flagSet.TargetCodec,
 	}
 }

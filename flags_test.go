@@ -19,13 +19,13 @@ func TestParseFlags_Invalid(t *testing.T) {
 
 func TestParseFlags_WhipURL(t *testing.T) {
 	flags := initFlags()
-	assert.ErrorIs(t, flags.Parse([]string{"webrtc-load-tool"}), errWhipURLRequired)
+	assert.ErrorIs(t, flags.Parse([]string{"webrtc-load-tool"}), errEndpointRequired)
 
 	flags = initFlags()
-	assert.ErrorIs(t, flags.Parse([]string{"webrtc-load-tool", ":-3"}), errInvalidWhipURL)
+	assert.ErrorIs(t, flags.Parse([]string{"webrtc-load-tool", ":-3"}), errInvalidEndpointURL)
 
 	flags = initFlags()
-	assert.ErrorIs(t, flags.Parse([]string{"webrtc-load-tool", "ws://ceeblue.net"}), errInvalidWhipURL)
+	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", "ws://ceeblue.net"}))
 
 	flags = initFlags()
 	assert.NoError(t, flags.Parse([]string{"webrtc-load-tool", testurl}))

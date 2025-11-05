@@ -2,14 +2,17 @@ package webrtcpeer
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"mime"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 	"github.com/stretchr/testify/assert"
@@ -439,6 +442,99 @@ func TestPeerConnection_WHIPError(t *testing.T) {
 	assert.Nil(t, pc)
 
 	<-ch
+}
+
+func TestPeerConnection_WebSocket(t *testing.T) {
+	ch := make(chan bool)
+	callback := func(pc *PeerConnection, change ChangeCallBackType, data any) {
+		if change == ChangeCallBackTypeStateChagne {
+			status := pc.GetStatus()
+			state, ok := data.(PeerConnectionStatus)
+			assert.True(t, ok)
+			assert.Equal(t, status, state)
+			if status == PeerConnectionStatusConnected {
+				ch <- true
+			}
+		}
+	}
+	client, err := NewClient(Configuration{
+		ICEServers: []webrtc.ICEServer{
+			{
+				URLs: []string{"stun:stun.l.google.com:19302"},
+			},
+		},
+	}, callback)
+	assert.NoError(t, err)
+
+	answer, videoTrack, audioTrack := createTestPair(t, client)
+
+	upgrader := websocket.Upgrader{}
+	wsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, upgradeErr := upgrader.Upgrade(w, r, nil)
+		assert.NoError(t, upgradeErr)
+		defer func() {
+			assert.NoError(t, conn.Close())
+		}()
+
+		// read offer_sdp
+		_, data, readErr := conn.ReadMessage()
+		assert.NoError(t, readErr)
+		var msg map[string]any
+		_ = json.Unmarshal(data, &msg)
+		off, _ := msg["offer_sdp"].(string)
+		assert.NotEmpty(t, off)
+
+		gather := webrtc.GatheringCompletePromise(answer)
+		assert.NoError(t, answer.SetRemoteDescription(webrtc.SessionDescription{
+			Type: webrtc.SDPTypeOffer,
+			SDP:  off,
+		}))
+		ans, answerErr := answer.CreateAnswer(nil)
+		assert.NoError(t, answerErr)
+		assert.NoError(t, answer.SetLocalDescription(ans))
+		<-gather
+
+		// send on_answer_sdp
+		_ = conn.WriteJSON(map[string]any{
+			"type":       "on_answer_sdp",
+			"result":     true,
+			"answer_sdp": answer.LocalDescription().SDP,
+		})
+
+		go func() {
+			for answer.ConnectionState() != webrtc.PeerConnectionStateDisconnected {
+				time.Sleep(10 * time.Millisecond)
+				_ = videoTrack.WriteRTP(&rtp.Packet{
+					Header: rtp.Header{
+						Version:        2,
+						SequenceNumber: 65535,
+						Timestamp:      123456,
+					},
+					Payload: []byte{0, 1, 2, 3},
+				})
+				_ = audioTrack.WriteRTP(&rtp.Packet{
+					Header: rtp.Header{
+						Version:        2,
+						Marker:         true,
+						SequenceNumber: 65535,
+						Timestamp:      123456,
+					},
+					Payload: []byte{0, 1, 2, 3},
+				})
+			}
+		}()
+	}))
+	defer wsSrv.Close()
+
+	u, _ := url.Parse(wsSrv.URL)
+	u.Scheme = "ws"
+
+	pc, err := client.NewPeerConnection(context.Background(), u.String())
+	assert.NoError(t, err)
+	assert.NotNil(t, pc)
+
+	<-ch
+	assert.NoError(t, pc.Close())
 }
 
 func TestLostPacketsTracker(t *testing.T) {
