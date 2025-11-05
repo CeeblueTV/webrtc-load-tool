@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -476,7 +477,20 @@ func TestPeerConnection_WebSocket(t *testing.T) {
 			assert.NoError(t, conn.Close())
 		}()
 
-		// read offer_sdp
+		// Handle metadata endpoint (ends with .json) - just read and ignore
+		if strings.HasSuffix(r.URL.Path, ".json") {
+			go func() {
+				for {
+					_, _, err := conn.ReadMessage()
+					if err != nil {
+						return
+					}
+				}
+			}()
+			return
+		}
+
+		// Handle signaling endpoint - read offer_sdp
 		_, data, readErr := conn.ReadMessage()
 		assert.NoError(t, readErr)
 		var msg map[string]any
