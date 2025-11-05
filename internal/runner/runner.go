@@ -144,7 +144,7 @@ func (t *callbacks) GetTracksPacketsDelta() tracksPacketsDelta {
 	var videoPacketsDelta, audioPacketsDelta uint64
 	var videoBytesDelta, audioBytesDelta uint64
 	var videoLostPacketsDelta, audioLostPacketsDelta uint64
-	t.tracks.Range(func(key, value interface{}) bool {
+	t.tracks.Range(func(key, value any) bool {
 		track, ok := key.(webrtcpeer.TrackInfo)
 		if !ok {
 			return true
@@ -241,7 +241,7 @@ func (t *callbacks) CountConnections() connectionsStats {
 		webrtcpeer.PeerConnectionStatusDisconnected: 0,
 	}
 
-	t.connectionsState.Range(func(_, value interface{}) bool {
+	t.connectionsState.Range(func(_, value any) bool {
 		state, ok := value.(webrtcpeer.PeerConnectionStatus)
 		if !ok {
 			return true
