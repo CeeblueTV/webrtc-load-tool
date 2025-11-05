@@ -68,7 +68,7 @@ type Configuration struct {
 }
 
 // Client represents the WebRTC Client for creating PeerConnections
-// Based on the Pion WebRTC API and WHIP signaling.
+// Based on the Pion WebRTC API and Ceeblue's whep/whip-like http implementation.
 type Client struct {
 	api            *webrtc.API
 	httpClient     *http.Client
@@ -81,7 +81,7 @@ type Client struct {
 }
 
 // NewClient creates a new WebRTC Client with the given configuration.
-// It handles the creation of PeerConnections and the signaling over WHIP.
+// It handles the creation of PeerConnections and the signaling over HTTP.
 func NewClient(config Configuration, callback ChangeCallback) (*Client, error) {
 	mediaEngine, err := buildMediaEngine(config.VideoCodec)
 	if err != nil {
@@ -159,14 +159,14 @@ func buildMediaEngine(codec VideoCodec) (mediaEngine *webrtc.MediaEngine, err er
 	return mediaEngine, nil
 }
 
-// NewPeerConnection creates a new PeerConnection and handles WHIP signaling.
-func (a *Client) NewPeerConnection(ctx context.Context, whipEndpoint string) (*PeerConnection, error) {
+// NewPeerConnection creates a new PeerConnection and handles Ceeblue's whep/whip-like http implementation.
+func (a *Client) NewPeerConnection(ctx context.Context, httpEndpoint string) (*PeerConnection, error) {
 	peer, err := a.initPeerConnection()
 	if err != nil {
 		return nil, err
 	}
 
-	answer, err := whip(ctx, a.httpClient, whipEndpoint, peer.GetOffer())
+	answer, err := httpSignal(ctx, a.httpClient, httpEndpoint, peer.GetOffer())
 	if err != nil {
 		closeErr := peer.pc.Close()
 		if closeErr != nil {

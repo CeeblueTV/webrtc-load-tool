@@ -10,20 +10,20 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestBuildWhipRequest_InvalidParameters(t *testing.T) {
-	req, err := buildWhipRequest(context.TODO(), "https://ceeblue.net/", "")
+func TestBuildHTTPSDPRequest_InvalidParameters(t *testing.T) {
+	req, err := buildHTTPSDPRequest(context.TODO(), "https://ceeblue.net/", "")
 	assert.ErrorIs(t, err, errEmptySDP)
 	assert.Nil(t, req)
 
-	//nolint:staticcheck // We are testing if it returns `NewRequestWithContext` errors.
-	req, err = buildWhipRequest(nil, "https://ceeblue.net/", "offer")
+	// Use an invalid URL to force NewRequestWithContext to error
+	req, err = buildHTTPSDPRequest(context.TODO(), "http://[::1", "offer")
 	assert.Error(t, err)
 	assert.Nil(t, req)
 }
 
-func TestBuildWhipRequest(t *testing.T) {
+func TestBuildHTTPSDPRequest(t *testing.T) {
 	url := "https://ceeblue.net/"
-	req, err := buildWhipRequest(context.TODO(), url, "offer")
+	req, err := buildHTTPSDPRequest(context.TODO(), url, "offer")
 	assert.NoError(t, err)
 	assert.NotNil(t, req)
 
@@ -36,7 +36,7 @@ func TestBuildWhipRequest(t *testing.T) {
 	assert.Equal(t, "application/sdp", mimeType)
 }
 
-func TestWhip(t *testing.T) {
+func TestHTTPSignal(t *testing.T) {
 	offer := "v=0\no=- 0 0 IN IP4"
 	answer := "v=0\no=- 1 1 IN IP4"
 	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,12 +49,12 @@ func TestWhip(t *testing.T) {
 		_, err := w.Write([]byte(answer))
 		assert.NoError(t, err)
 	}))
-	res, err := whip(context.TODO(), testServer.Client(), testServer.URL, offer)
+	res, err := httpSignal(context.TODO(), testServer.Client(), testServer.URL, offer)
 	assert.NoError(t, err)
 	assert.Equal(t, answer, res)
 }
 
-func TestWhip_BadRequests(t *testing.T) {
+func TestHTTPSignal_BadRequests(t *testing.T) {
 	badCases := []struct {
 		ExpectedError   error
 		ResponseHeaders map[string]string
@@ -92,7 +92,7 @@ func TestWhip_BadRequests(t *testing.T) {
 				"Content-Type": "application/sdp",
 			},
 			ResponseCode:  http.StatusOK,
-			ExpectedError: errInvalidWHIPResponseCode,
+			ExpectedError: errInvalidHTTPResponseCode,
 		},
 		{
 			Name:   "Invalid response content-type",
@@ -102,7 +102,7 @@ func TestWhip_BadRequests(t *testing.T) {
 				"Content-Type": "plain/text",
 			},
 			ResponseCode:  http.StatusCreated,
-			ExpectedError: errInvalidWhipResponse,
+			ExpectedError: errInvalidHTTPResponse,
 		},
 		{
 			Name:   "Fail to read response",
@@ -122,7 +122,7 @@ func TestWhip_BadRequests(t *testing.T) {
 				"Content-Type": "application/sdp",
 			},
 			ResponseCode:  http.StatusCreated,
-			ExpectedError: errInvalidWhipResponse,
+			ExpectedError: errInvalidHTTPResponse,
 		},
 	}
 
@@ -157,7 +157,7 @@ func TestWhip_BadRequests(t *testing.T) {
 				testServer.Close()
 			}
 
-			res, err := whip(context.TODO(), testServer.Client(), testServer.URL, testCase.Offer)
+			res, err := httpSignal(context.TODO(), testServer.Client(), testServer.URL, testCase.Offer)
 			if testCase.ExpectedError == nil {
 				assert.Error(t, err)
 			} else {

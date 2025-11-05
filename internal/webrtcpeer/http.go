@@ -9,11 +9,11 @@ import (
 	"strings"
 )
 
-// Basic whip implementation, It doesn't hanlde edge cases,
-// And doesn't implement the full protocol, But it's enough
-// For Ceeblue whip server.
-func whip(ctx context.Context, client *http.Client, url, offer string) (answer string, err error) {
-	req, err := buildWhipRequest(ctx, url, offer)
+// Basic HTTP signaling implementation for exchanging SDP over HTTP.
+// It doesn't handle edge cases or the full WHIP/WHEP protocols, but is
+// sufficient for the target server expectations.
+func httpSignal(ctx context.Context, client *http.Client, url, offer string) (answer string, err error) {
+	req, err := buildHTTPSDPRequest(ctx, url, offer)
 	if err != nil {
 		return "", fmt.Errorf("%w: failed to create request", err)
 	}
@@ -32,12 +32,12 @@ func whip(ctx context.Context, client *http.Client, url, offer string) (answer s
 	}()
 
 	if res.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("%w: invalid WHIP response code %d", errInvalidWHIPResponseCode, res.StatusCode)
+		return "", fmt.Errorf("%w: invalid HTTP response code %d", errInvalidHTTPResponseCode, res.StatusCode)
 	}
 
 	mimeType, _, _ := mime.ParseMediaType(res.Header.Get("Content-Type"))
 	if mimeType != "application/sdp" {
-		return "", fmt.Errorf("%w: invalid WHIP response", errInvalidWhipResponse)
+		return "", fmt.Errorf("%w: invalid HTTP response", errInvalidHTTPResponse)
 	}
 
 	body, err := io.ReadAll(res.Body)
@@ -46,13 +46,13 @@ func whip(ctx context.Context, client *http.Client, url, offer string) (answer s
 	}
 
 	if len(body) == 0 {
-		return "", fmt.Errorf("%w: empty response", errInvalidWhipResponse)
+		return "", fmt.Errorf("%w: empty response", errInvalidHTTPResponse)
 	}
 
 	return string(body), nil
 }
 
-func buildWhipRequest(ctx context.Context, url, offer string) (*http.Request, error) {
+func buildHTTPSDPRequest(ctx context.Context, url, offer string) (*http.Request, error) {
 	if offer == "" {
 		return nil, fmt.Errorf("%w: Offer SDP is empty", errEmptySDP)
 	}
