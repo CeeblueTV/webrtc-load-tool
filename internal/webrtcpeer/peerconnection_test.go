@@ -481,12 +481,13 @@ func TestPeerConnection_WebSocket(t *testing.T) {
 		if strings.HasSuffix(r.URL.Path, ".json") {
 			go func() {
 				for {
-					_, _, err := conn.ReadMessage()
+					_, _, err = conn.ReadMessage()
 					if err != nil {
 						return
 					}
 				}
 			}()
+
 			return
 		}
 
