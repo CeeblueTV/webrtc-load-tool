@@ -30,21 +30,21 @@ type handlerCallbacks interface {
 type webrtcHandler struct {
 	callbacks    handlerCallbacks
 	client       *webrtcpeer.Client
-	whipEndpoint string
+	httpEndpoint string
 	peers        []*webrtcpeer.PeerConnection
 	mu           sync.RWMutex
 }
 
 func newWebRTCHandler(
 	config webrtcpeer.Configuration,
-	whipEndpoint string,
+	httpEndpoint string,
 	callbacks handlerCallbacks,
 ) (handler, error) {
 	handler := &webrtcHandler{
 		callbacks:    callbacks,
 		peers:        make([]*webrtcpeer.PeerConnection, 0),
 		mu:           sync.RWMutex{},
-		whipEndpoint: whipEndpoint,
+		httpEndpoint: httpEndpoint,
 	}
 	client, err := webrtcpeer.NewClient(config, handler.changeCallback)
 	if err != nil {
@@ -87,7 +87,7 @@ func (h *webrtcHandler) changeCallback(
 }
 
 func (h *webrtcHandler) AddConnection(ctx context.Context) error {
-	peer, err := h.client.NewPeerConnection(ctx, h.whipEndpoint)
+	peer, err := h.client.NewPeerConnection(ctx, h.httpEndpoint)
 	if err != nil {
 		return err
 	}
